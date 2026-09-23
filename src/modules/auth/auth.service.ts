@@ -1,5 +1,4 @@
 import {
-  BadRequestException,
   ForbiddenException,
   Injectable,
   Logger,
@@ -57,7 +56,7 @@ export class AuthService implements OnModuleInit {
   }
 
   async registrarAluno(dto: RegistrarAlunoDto): Promise<UsuarioRespostaDto> {
-    this.validarDominioDoEmail(dto.email);
+    this.usuariosService.validarDominioDoEmail(dto.email);
 
     return this.usuariosService.criarAluno({
       nome: dto.nome,
@@ -80,7 +79,7 @@ export class AuthService implements OnModuleInit {
    * producao a aplicacao se recusa a subir nessa condicao (ver onModuleInit).
    */
   async registrarProfessor(dto: RegistrarProfessorDto): Promise<UsuarioRespostaDto> {
-    this.validarDominioDoEmail(dto.email);
+    this.usuariosService.validarDominioDoEmail(dto.email);
     this.validarCodigoDeCadastroDeProfessor(dto.codigoCadastro);
 
     return this.usuariosService.criarProfessor({
@@ -145,23 +144,6 @@ export class AuthService implements OnModuleInit {
       expiraEmIso: new Date(exp * 1000).toISOString(),
       usuario: dadosUsuario,
     };
-  }
-
-  /** D-09: restringe o cadastro a dominios institucionais, se configurado. */
-  private validarDominioDoEmail(email: string): void {
-    const permitidos = this.config.get<string[]>('cadastro.dominiosPermitidos') ?? [];
-
-    if (permitidos.length === 0) {
-      return;
-    }
-
-    const dominio = email.split('@')[1]?.toLowerCase() ?? '';
-
-    if (!permitidos.includes(dominio)) {
-      throw new BadRequestException(
-        `Cadastro permitido apenas para e-mails institucionais: ${permitidos.join(', ')}.`,
-      );
-    }
   }
 
   private validarCodigoDeCadastroDeProfessor(codigoInformado?: string): void {

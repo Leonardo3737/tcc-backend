@@ -3,6 +3,7 @@ import {
   DataType,
   Default,
   DefaultScope,
+  ForeignKey,
   HasOne,
   Model,
   PrimaryKey,
@@ -64,6 +65,17 @@ export class Usuario extends Model {
   @Default(true)
   @Column({ type: DataType.BOOLEAN, allowNull: false })
   ativo: boolean;
+
+  /**
+   * Quem criou esta conta. NULL = auto-cadastro em /auth/registro/*.
+   *
+   * Preenchido quando um PROFESSOR cria a conta administrativamente. Como nao ha
+   * perfil ADMIN, professores expandem o proprio conjunto — e essa coluna e o
+   * que torna isso auditavel.
+   */
+  @ForeignKey(() => Usuario)
+  @Column({ type: DataType.UUID, allowNull: true })
+  criadoPorUsuarioId: string | null;
 
   @HasOne(() => Aluno)
   aluno?: Aluno;

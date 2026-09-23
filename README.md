@@ -149,7 +149,7 @@ explicitamente do que descobrir em produção que `JWT_SECRET` estava vazio.
 npm run db:migrate
 ```
 
-São 16 migrations. Outros comandos: `db:migrate:status`, `db:migrate:undo`,
+São 17 migrations. Outros comandos: `db:migrate:status`, `db:migrate:undo`,
 `db:migrate:undo:all`.
 
 O schema é **propriedade das migrations**. `synchronize` está desligado e não
@@ -288,9 +288,11 @@ encerrar e remover são transições de estado (RN10).
 | `POST` | `/api/auth/login` | público (**5 req/min**) |
 | `GET` `PATCH` | `/api/usuarios/eu` | autenticado |
 | `PATCH` | `/api/usuarios/eu/senha` | autenticado |
+| `POST` | `/api/alunos` | **PROFESSOR** — cadastra um aluno |
 | `GET` | `/api/alunos` | **PROFESSOR** — `?busca=`, `?semVinculoAtivoNaMonitoria=` |
 | `PATCH` | `/api/alunos/eu` | **ALUNO** |
 | `GET` | `/api/alunos/:usuarioId` | PROFESSOR ou o próprio |
+| `POST` | `/api/professores` | **PROFESSOR** — cadastra outro professor |
 | `GET` | `/api/professores` · `/api/professores/:usuarioId` | autenticado |
 | `PATCH` | `/api/professores/eu` | **PROFESSOR** |
 
@@ -367,6 +369,48 @@ encerrar e remover são transições de estado (RN10).
 
 ---
 
+## Gestão de usuários (sem perfil ADMIN)
+
+O domínio não prevê um ator acima do professor, então **são os professores que
+administram os usuários da plataforma**:
+
+```
+POST /api/alunos          { nome, email, senhaProvisoria, matricula, curso? }
+POST /api/professores     { nome, email, senhaProvisoria, identificacaoFuncional?, departamento? }
+```
+
+Convivem com o auto-cadastro público (`/api/auth/registro/*`): servem para o
+professor cadastrar quem ainda não se cadastrou sozinho.
+
+**`POST /api/professores` não exige `CODIGO_CADASTRO_PROFESSOR`.** Aquele código
+protege o auto-cadastro *público*, onde é a única barreira entre um desconhecido
+e o perfil PROFESSOR. Aqui a barreira é outra e mais forte: estar autenticado
+como professor.
+
+### O que isso implica, explicitamente
+
+Sem ADMIN, **qualquer professor cria professores, e esses também poderão**. Não
+há hierarquia contendo a expansão — o que existe é rastro: toda conta criada por
+esse caminho grava `criadoPorUsuarioId`, e `GET /api/usuarios/eu` e as listagens
+devolvem esse campo. É a mesma escolha já feita em
+`monitoria_participantes.habilitado_por_usuario_id` para tornar a RN01 auditável.
+
+Se um dia houver coordenação acima do professor, a contenção natural é um perfil
+ADMIN restringindo `POST /api/professores` — e a trilha já estará lá para dizer
+quem entrou por onde.
+
+### A senha é provisória de verdade
+
+Quem cria a conta inevitavelmente conhece a senha inicial. O combinado é que a
+pessoa a troque no primeiro acesso, em `PATCH /api/usuarios/eu/senha`.
+
+**O backend ainda não força essa troca.** Fazê-lo exigiria uma coluna
+`deveTrocarSenha` e um guard que libera apenas a rota de troca enquanto ela
+estiver marcada — um recurso próprio, não um detalhe. Fica registrado como
+melhoria recomendada antes de uso institucional real.
+
+---
+
 ## Contrato para o frontend
 
 ### Fuso horário — a armadilha de integração mais provável
@@ -406,6 +450,7 @@ Não reimplemente estas regras no cliente:
 | `aceitaInscricao` | `AtendimentoRespostaDto` | Depende de `inicio > agora` — o relógio do navegador pode estar errado |
 | `podeAvaliar` / `jaAvaliei` | própria inscrição, em `GET /atendimentos/:id` e `/meus` | Evita o clique que só descobre o `409` depois. Aparecem **apenas** na inscrição do requisitante: marcar as dos colegas revelaria quem avaliou |
 | `meuPapel` / `meuParticipanteId` | `MonitoriaRespostaDto` | Vários endpoints pedem o id do **vínculo**, não do usuário |
+| `criadoPorUsuarioId` | `UsuarioRespostaDto` | `null` = auto-cadastro; preenchido = conta criada por um professor |
 | `monitoria.disciplina` | `AtendimentoRespostaDto` | `GET /atendimentos/meus` cruza monitorias; sem isso seria um request por linha |
 
 ### Formato das listagens
@@ -513,7 +558,9 @@ INSCRIÇÃO    INSCRITO ──► PRESENTE | AUSENTE | CANCELADA
 | 16 | **Cadastro aberto de professor derruba o boot em produção** | um `logger.warn` rola para fora da tela; com o cadastro aberto, qualquer pessoa vira PROFESSOR e habilita monitores — RN01 vira decoração |
 | 17 | **Disponibilidades legíveis por qualquer autenticado** | RN07 restringe *materiais*, não horários. Exigir participação invertia a descoberta: o aluno precisava entrar para só então saber se o horário servia |
 | 18 | **Reagendamento em vez de cancelar-e-recriar** | usa a FK composta com `ON UPDATE CASCADE` já existente; as inscrições acompanham. Cancelar deixava no histórico um evento sugerindo que algo deu errado e fazia os inscritos perderem a vaga |
-| 19 | **Pontuação agregada por SQL, nunca em memória** | somar em memória uma janela de linhas fazia `/meus-pontos` e `/ranking` mostrarem totais diferentes para a mesma pessoa |
+| 19 | **Professores administram usuários, com trilha de autoria** | não há ADMIN no domínio. A expansão do conjunto de professores não tem contenção hierárquica, então a resposta possível é auditoria: `usuarios.criado_por_usuario_id` registra quem criou cada conta |
+| 20 | **Validação de domínio institucional no `UsuariosService`** | vale nos dois caminhos de criação (auto-cadastro e criação pelo professor). Mantida em um lugar só para que fechar um caminho não deixe o outro aberto |
+| 21 | **Pontuação agregada por SQL, nunca em memória** | somar em memória uma janela de linhas fazia `/meus-pontos` e `/ranking` mostrarem totais diferentes para a mesma pessoa |
 
 ### Segurança
 

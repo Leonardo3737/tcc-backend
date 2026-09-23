@@ -6,9 +6,17 @@ import {
   Param,
   ParseUUIDPipe,
   Patch,
+  Post,
   Query,
 } from '@nestjs/common';
-import { ApiBearerAuth, ApiOkResponse, ApiOperation, ApiTags } from '@nestjs/swagger';
+import {
+  ApiBearerAuth,
+  ApiConflictResponse,
+  ApiCreatedResponse,
+  ApiOkResponse,
+  ApiOperation,
+  ApiTags,
+} from '@nestjs/swagger';
 
 import { Perfis } from '../../common/decorators/perfis.decorator';
 import { UsuarioAtual } from '../../common/decorators/usuario-atual.decorator';
@@ -18,6 +26,8 @@ import { RespostaPaginada } from '../../common/dto/resposta-paginada.dto';
 import { PerfilUsuario } from '../../common/enums/perfil-usuario.enum';
 import { UsuarioAutenticado } from '../../common/types/usuario-autenticado';
 import { AtualizarAlunoDto } from './dto/atualizar-aluno.dto';
+import { RespostaErro } from '../../common/dto/resposta-erro.dto';
+import { CriarAlunoPeloProfessorDto } from './dto/criar-usuario-pelo-professor.dto';
 import { UsuarioRespostaDto } from './dto/usuario-resposta.dto';
 import { UsuariosService } from './usuarios.service';
 
@@ -26,6 +36,33 @@ import { UsuariosService } from './usuarios.service';
 @Controller('alunos')
 export class AlunosController {
   constructor(private readonly usuariosService: UsuariosService) {}
+
+  /**
+   * Criacao administrativa de aluno.
+   *
+   * Enquanto nao existe perfil ADMIN, sao os professores que administram os
+   * usuarios da plataforma. Convive com o auto-cadastro publico
+   * (POST /api/auth/registro/aluno): este caminho serve para o professor
+   * cadastrar quem ainda nao se cadastrou sozinho, e deixa registrado em
+   * `criadoPorUsuarioId` quem o fez.
+   */
+  @Post()
+  @Perfis(PerfilUsuario.PROFESSOR)
+  @ApiOperation({
+    summary: 'Cadastra um aluno. Somente PROFESSOR.',
+    description:
+      'A senha informada e PROVISORIA e fica conhecida por quem cria a conta. ' +
+      'Oriente a pessoa a troca-la no primeiro acesso em PATCH /api/usuarios/eu/senha.',
+  })
+  @ApiCreatedResponse({ type: UsuarioRespostaDto })
+  @ApiConflictResponse({ description: 'E-mail ou matricula ja cadastrados.', type: RespostaErro })
+  criar(
+    @Body() dto: CriarAlunoPeloProfessorDto,
+    @UsuarioAtual() professor: UsuarioAutenticado,
+  ): Promise<UsuarioRespostaDto> {
+    // O autor vem do token, nunca do corpo: e o que torna a trilha confiavel.
+    return this.usuariosService.criarAlunoComoProfessor(dto, professor.id);
+  }
 
   /**
    * Restrito a PROFESSOR.

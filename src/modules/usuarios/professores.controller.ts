@@ -1,5 +1,12 @@
-import { Body, Controller, Get, Param, ParseUUIDPipe, Patch, Query } from '@nestjs/common';
-import { ApiBearerAuth, ApiOkResponse, ApiOperation, ApiTags } from '@nestjs/swagger';
+import { Body, Controller, Get, Param, ParseUUIDPipe, Patch, Post, Query } from '@nestjs/common';
+import {
+  ApiBearerAuth,
+  ApiConflictResponse,
+  ApiCreatedResponse,
+  ApiOkResponse,
+  ApiOperation,
+  ApiTags,
+} from '@nestjs/swagger';
 
 import { Perfis } from '../../common/decorators/perfis.decorator';
 import { UsuarioAtual } from '../../common/decorators/usuario-atual.decorator';
@@ -9,6 +16,8 @@ import { RespostaPaginada } from '../../common/dto/resposta-paginada.dto';
 import { PerfilUsuario } from '../../common/enums/perfil-usuario.enum';
 import { UsuarioAutenticado } from '../../common/types/usuario-autenticado';
 import { AtualizarProfessorDto } from './dto/atualizar-professor.dto';
+import { RespostaErro } from '../../common/dto/resposta-erro.dto';
+import { CriarProfessorPeloProfessorDto } from './dto/criar-usuario-pelo-professor.dto';
 import { UsuarioRespostaDto } from './dto/usuario-resposta.dto';
 import { UsuariosService } from './usuarios.service';
 
@@ -17,6 +26,39 @@ import { UsuariosService } from './usuarios.service';
 @Controller('professores')
 export class ProfessoresController {
   constructor(private readonly usuariosService: UsuariosService) {}
+
+  /**
+   * Criacao administrativa de professor — POR outro professor.
+   *
+   * Consequencia de nao existir ADMIN: o conjunto de professores se expande por
+   * decisao de quem ja esta dentro, sem nivel acima para autorizar. Nao ha
+   * hierarquia contendo isso; o que existe e a trilha — `criadoPorUsuarioId`
+   * registra quem criou cada conta.
+   *
+   * Nao exige CODIGO_CADASTRO_PROFESSOR: aquele codigo protege o auto-cadastro
+   * PUBLICO, onde ele e a unica barreira. Aqui a barreira e estar autenticado
+   * como professor, que e mais forte.
+   */
+  @Post()
+  @Perfis(PerfilUsuario.PROFESSOR)
+  @ApiOperation({
+    summary: 'Cadastra outro professor. Somente PROFESSOR.',
+    description:
+      'Nao exige CODIGO_CADASTRO_PROFESSOR — a autorizacao e ja ser professor. ' +
+      'A senha informada e PROVISORIA: oriente a pessoa a troca-la em ' +
+      'PATCH /api/usuarios/eu/senha. A autoria fica registrada em criadoPorUsuarioId.',
+  })
+  @ApiCreatedResponse({ type: UsuarioRespostaDto })
+  @ApiConflictResponse({
+    description: 'E-mail ou identificacao funcional ja cadastrados.',
+    type: RespostaErro,
+  })
+  criar(
+    @Body() dto: CriarProfessorPeloProfessorDto,
+    @UsuarioAtual() professor: UsuarioAutenticado,
+  ): Promise<UsuarioRespostaDto> {
+    return this.usuariosService.criarProfessorComoProfessor(dto, professor.id);
+  }
 
   /**
    * Aberto a qualquer usuario autenticado — inclusive alunos.

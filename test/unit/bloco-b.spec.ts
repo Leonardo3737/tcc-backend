@@ -32,6 +32,8 @@ describe('B1 — busca de alunos para o fluxo da RN01', () => {
         {} as never,
         {} as never,
         participanteModel as never,
+        // ConfigService: sem dominios configurados, a validacao e no-op.
+        { get: () => [] } as never,
       ),
       findAndCountAll,
       participanteModel,

@@ -4,6 +4,7 @@ import {
   NotFoundException,
   UnauthorizedException,
 } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { InjectConnection, InjectModel } from '@nestjs/sequelize';
 import { Op } from 'sequelize';
 import { Sequelize } from 'sequelize-typescript';
@@ -14,6 +15,10 @@ import { UsuarioRespostaDto } from './dto/usuario-resposta.dto';
 import { Aluno } from './entities/aluno.model';
 import { MonitoriaParticipante } from '../monitorias/entities/monitoria-participante.model';
 import { StatusParticipacao } from '../../common/enums/status-participacao.enum';
+import {
+  CriarAlunoPeloProfessorDto,
+  CriarProfessorPeloProfessorDto,
+} from './dto/criar-usuario-pelo-professor.dto';
 import { FiltroAlunosDto } from './dto/filtro-alunos.dto';
 import { HashService } from './hash.service';
 import { Professor } from './entities/professor.model';
@@ -23,6 +28,8 @@ interface DadosBaseUsuario {
   nome: string;
   email: string;
   senhaHash: string;
+  /** NULL = auto-cadastro. Preenchido quando um professor cria a conta. */
+  criadoPorUsuarioId?: string | null;
 }
 
 @Injectable()
@@ -40,6 +47,7 @@ export class UsuariosService {
      */
     @InjectModel(MonitoriaParticipante)
     private readonly participanteModel: typeof MonitoriaParticipante,
+    private readonly config: ConfigService,
   ) {}
 
   /**
@@ -54,7 +62,12 @@ export class UsuariosService {
   ): Promise<UsuarioRespostaDto> {
     return this.sequelize.transaction(async (transaction) => {
       const usuario = await this.usuarioModel.create(
-        { nome: dados.nome, email: dados.email, senhaHash: dados.senhaHash },
+        {
+          nome: dados.nome,
+          email: dados.email,
+          senhaHash: dados.senhaHash,
+          criadoPorUsuarioId: dados.criadoPorUsuarioId ?? null,
+        },
         { transaction },
       );
 
@@ -80,7 +93,12 @@ export class UsuariosService {
   ): Promise<UsuarioRespostaDto> {
     return this.sequelize.transaction(async (transaction) => {
       const usuario = await this.usuarioModel.create(
-        { nome: dados.nome, email: dados.email, senhaHash: dados.senhaHash },
+        {
+          nome: dados.nome,
+          email: dados.email,
+          senhaHash: dados.senhaHash,
+          criadoPorUsuarioId: dados.criadoPorUsuarioId ?? null,
+        },
         { transaction },
       );
 
@@ -95,6 +113,85 @@ export class UsuariosService {
 
       return UsuarioRespostaDto.deModelo(usuario, null, professor);
     });
+  }
+
+  /**
+   * Criacao administrativa de ALUNO por um professor.
+   *
+   * Mesmas regras do auto-cadastro (dominio institucional, unicidade de e-mail e
+   * matricula pelas constraints), com duas diferencas: a senha e provisoria e
+   * definida por quem cria, e a autoria fica registrada em `criadoPorUsuarioId`.
+   *
+   * A autorizacao — ser PROFESSOR — e do controller. Aqui ficam as regras.
+   */
+  async criarAlunoComoProfessor(
+    dto: CriarAlunoPeloProfessorDto,
+    professorId: string,
+  ): Promise<UsuarioRespostaDto> {
+    this.validarDominioDoEmail(dto.email);
+
+    return this.criarAluno({
+      nome: dto.nome,
+      email: dto.email,
+      senhaHash: await this.hashService.gerar(dto.senhaProvisoria),
+      matricula: dto.matricula,
+      curso: dto.curso ?? null,
+      criadoPorUsuarioId: professorId,
+    });
+  }
+
+  /**
+   * Criacao administrativa de PROFESSOR por outro professor.
+   *
+   * NAO exige CODIGO_CADASTRO_PROFESSOR, e isso e deliberado: aquele codigo
+   * existe para proteger o auto-cadastro publico, onde nao ha nada alem dele
+   * separando um desconhecido do perfil PROFESSOR. Aqui a barreira e outra e mais
+   * forte — quem chama ja esta autenticado e ja e professor. Exigir os dois seria
+   * pedir ao professor um segredo de infraestrutura que ele nao tem por que
+   * conhecer.
+   *
+   * O efeito colateral, que precisa estar as claras: como nao ha ADMIN, qualquer
+   * professor pode criar professores, e esses tambem poderao. A contencao
+   * disponivel e a trilha de auditoria, nao a hierarquia.
+   */
+  async criarProfessorComoProfessor(
+    dto: CriarProfessorPeloProfessorDto,
+    professorId: string,
+  ): Promise<UsuarioRespostaDto> {
+    this.validarDominioDoEmail(dto.email);
+
+    return this.criarProfessor({
+      nome: dto.nome,
+      email: dto.email,
+      senhaHash: await this.hashService.gerar(dto.senhaProvisoria),
+      identificacaoFuncional: dto.identificacaoFuncional ?? null,
+      departamento: dto.departamento ?? null,
+      criadoPorUsuarioId: professorId,
+    });
+  }
+
+  /**
+   * D-09: restringe o cadastro a dominios institucionais, se configurado.
+   *
+   * Mora aqui, e nao no AuthService, porque a regra e sobre o e-mail do USUARIO
+   * e vale em todos os caminhos de criacao — auto-cadastro e criacao pelo
+   * professor. Mantida em um lugar so para que fechar um caminho nao deixe o
+   * outro aberto.
+   */
+  validarDominioDoEmail(email: string): void {
+    const permitidos = this.config.get<string[]>('cadastro.dominiosPermitidos') ?? [];
+
+    if (permitidos.length === 0) {
+      return;
+    }
+
+    const dominio = email.split('@')[1]?.toLowerCase() ?? '';
+
+    if (!permitidos.includes(dominio)) {
+      throw new BadRequestException(
+        `Cadastro permitido apenas para e-mails institucionais: ${permitidos.join(', ')}.`,
+      );
+    }
   }
 
   /** Unico ponto do sistema que carrega o hash da senha. Usado so no login. */

@@ -61,6 +61,15 @@ export class UsuarioRespostaDto {
   @ApiProperty({ example: '2026-08-20T12:00:00.000Z' })
   criadoEm: Date;
 
+  @ApiPropertyOptional({
+    format: 'uuid',
+    nullable: true,
+    description:
+      'Professor que criou esta conta administrativamente. null quando a pessoa ' +
+      'se cadastrou sozinha em /auth/registro.',
+  })
+  criadoPorUsuarioId: string | null;
+
   static deModelo(usuario: Usuario, aluno?: Aluno | null, professor?: Professor | null) {
     const alunoVinculado = aluno ?? usuario.aluno;
     const professorVinculado = professor ?? usuario.professor;
@@ -72,6 +81,7 @@ export class UsuarioRespostaDto {
     dto.ativo = usuario.ativo;
     dto.perfis = UsuarioRespostaDto.derivarPerfis(alunoVinculado, professorVinculado);
     dto.criadoEm = usuario.createdAt;
+    dto.criadoPorUsuarioId = usuario.criadoPorUsuarioId ?? null;
 
     if (alunoVinculado) {
       dto.aluno = { matricula: alunoVinculado.matricula, curso: alunoVinculado.curso };
