@@ -7,13 +7,13 @@ import {
 import { InjectModel } from '@nestjs/sequelize';
 
 import { RespostaPaginada } from '../../common/dto/resposta-paginada.dto';
-import { PaginacaoDto } from '../../common/dto/paginacao.dto';
 import { StatusMonitoria } from '../../common/enums/status-monitoria.enum';
 import { TipoMaterial } from '../../common/enums/tipo-material.enum';
 import { UsuarioAutenticado } from '../../common/types/usuario-autenticado';
 import { ContextoParticipacao } from '../monitorias/participacao.service';
 import { Usuario } from '../usuarios/entities/usuario.model';
 import { AtualizarMaterialDto } from './dto/atualizar-material.dto';
+import { FiltroMateriaisDto } from './dto/filtro-materiais.dto';
 import { CriarMaterialDto } from './dto/criar-material.dto';
 import { MaterialRespostaDto } from './dto/material-resposta.dto';
 import { Material } from './entities/material.model';
@@ -65,12 +65,12 @@ export class MateriaisService {
    */
   async listar(
     monitoriaId: string,
-    paginacao: PaginacaoDto,
-    incluirRemovidos: boolean,
+    filtro: FiltroMateriaisDto,
   ): Promise<RespostaPaginada<MaterialRespostaDto>> {
     const where: Record<string, unknown> = { monitoriaId };
 
-    if (!incluirRemovidos) {
+    // Material removido some da listagem por padrao, mas continua no banco (RN10).
+    if (!filtro.incluirRemovidos) {
       where.removidoEm = null;
     }
 
@@ -78,16 +78,16 @@ export class MateriaisService {
       where,
       include: [{ model: Usuario, as: 'autor', attributes: ['id', 'nome'] }],
       order: [['created_at', 'DESC']],
-      limit: paginacao.limite,
-      offset: paginacao.offset,
+      limit: filtro.limite,
+      offset: filtro.offset,
       distinct: true,
     });
 
     return new RespostaPaginada(
       rows.map(MaterialRespostaDto.deModelo),
       count,
-      paginacao.pagina,
-      paginacao.limite,
+      filtro.pagina,
+      filtro.limite,
     );
   }
 

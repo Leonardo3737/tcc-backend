@@ -683,6 +683,108 @@ async function main() {
     falhou('Atendimento sem resumo da monitoria');
   }
 
+  secao('8e. Materiais — acesso, publicacao e remocao (RN07/RN08)');
+  const materialDoProfessor = await esperarSucesso(
+    'Professor publica material',
+    api('POST', `/monitorias/${monitoria.id}/materiais`, {
+      token: professor.token,
+      corpo: { titulo: 'Ementa da disciplina', url: 'https://exemplo.com/ementa.pdf' },
+    }),
+  );
+
+  await esperarSucesso(
+    'Monitor publica material (RN08)',
+    api('POST', `/monitorias/${monitoria.id}/materiais`, {
+      token: monitora.token,
+      corpo: {
+        titulo: 'Lista de exercicios - Limites',
+        descricao: 'Exercicios 1 a 20.',
+        url: 'https://exemplo.com/lista-limites.pdf',
+      },
+    }),
+  );
+
+  await esperarRecusa(
+    'RN08: MONITORADO nao publica material (403)',
+    403,
+    api('POST', `/monitorias/${monitoria.id}/materiais`, {
+      token: monitorado.token,
+      corpo: { titulo: 'Nao deveria existir', url: 'https://exemplo.com/x.pdf' },
+    }),
+  );
+
+  await esperarRecusa(
+    'RN07: aluno de fora nao acessa o acervo (403)',
+    403,
+    api('GET', `/monitorias/${monitoria.id}/materiais`, { token: estranho.token }),
+  );
+
+  await esperarRecusa(
+    'URL nao-http e recusada (evita XSS via javascript:) (400)',
+    400,
+    api('POST', `/monitorias/${monitoria.id}/materiais`, {
+      token: professor.token,
+      corpo: { titulo: 'Malicioso', url: 'javascript:alert(1)' },
+    }),
+  );
+
+  /**
+   * Regressao: a listagem combinava `@Query() dto` com `@Query('incluirRemovidos')`
+   * avulso. Como o ValidationPipe valida o objeto de query INTEIRO contra o DTO e
+   * `forbidNonWhitelisted` esta ligado, passar o parametro documentado derrubava a
+   * requisicao com 400. Nenhum teste unitario pegava isso: o pipe so roda em
+   * requisicao HTTP real.
+   */
+  const listaComFiltros = await esperarSucesso(
+    'Listagem aceita os parametros documentados juntos',
+    api('GET', `/monitorias/${monitoria.id}/materiais?incluirRemovidos=false&pagina=1&limite=20`, {
+      token: monitorado.token,
+    }),
+  );
+
+  if (listaComFiltros.dados.length === 2 && listaComFiltros.meta.total === 2) {
+    ok('Monitorado ve os dois materiais publicados', `total=${listaComFiltros.meta.total}`);
+  } else {
+    falhou('Quantidade inesperada de materiais', JSON.stringify(listaComFiltros.meta));
+  }
+
+  await esperarSucesso(
+    'Professor remove o proprio material',
+    api('POST', `/monitorias/${monitoria.id}/materiais/${materialDoProfessor.id}/remover`, {
+      token: professor.token,
+    }),
+  );
+
+  const listaPadrao = await esperarSucesso(
+    'Listagem padrao apos a remocao',
+    api('GET', `/monitorias/${monitoria.id}/materiais`, { token: monitorado.token }),
+  );
+
+  const listaComRemovidos = await esperarSucesso(
+    'Listagem com incluirRemovidos=true',
+    api('GET', `/monitorias/${monitoria.id}/materiais?incluirRemovidos=true`, {
+      token: professor.token,
+    }),
+  );
+
+  // RN10: remover e esconder da listagem, nao apagar do banco.
+  if (listaPadrao.meta.total === 1 && listaComRemovidos.meta.total === 2) {
+    ok('RN10: removido sai da listagem mas continua no banco', '1 visivel, 2 no total');
+  } else {
+    falhou(
+      'Soft delete nao se comportou como esperado',
+      `padrao=${listaPadrao.meta.total} comRemovidos=${listaComRemovidos.meta.total}`,
+    );
+  }
+
+  await esperarRecusa(
+    'Remover duas vezes e recusado (409)',
+    409,
+    api('POST', `/monitorias/${monitoria.id}/materiais/${materialDoProfessor.id}/remover`, {
+      token: professor.token,
+    }),
+  );
+
   secao('9. Encerramento preserva o historico');
   const pendente = await esperarSucesso(
     'Ana abre mais uma sessao, que fica AGENDADA',

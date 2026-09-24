@@ -224,7 +224,7 @@ Com o servidor rodando em outro terminal:
 npm run test:fluxo
 ```
 
-**78 verificações**, todas passando contra PostgreSQL 17.
+**90 verificações**, todas passando contra PostgreSQL 17.
 [scripts/fluxo-completo.mjs](scripts/fluxo-completo.mjs) percorre o fluxo inteiro
 — professor cria monitoria → habilita monitor → aluno se inscreve → monitor
 declara disponibilidade → monitorado agenda → atendimento realizado → histórico

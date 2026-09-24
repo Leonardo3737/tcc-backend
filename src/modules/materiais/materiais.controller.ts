@@ -5,7 +5,6 @@ import {
   HttpCode,
   HttpStatus,
   Param,
-  ParseBoolPipe,
   ParseUUIDPipe,
   Patch,
   Post,
@@ -19,14 +18,12 @@ import {
   ApiForbiddenResponse,
   ApiOkResponse,
   ApiOperation,
-  ApiQuery,
   ApiTags,
 } from '@nestjs/swagger';
 
 import { ContextoMonitoria } from '../../common/decorators/contexto-monitoria.decorator';
 import { ExigeParticipacao } from '../../common/decorators/exige-participacao.decorator';
 import { UsuarioAtual } from '../../common/decorators/usuario-atual.decorator';
-import { PaginacaoDto } from '../../common/dto/paginacao.dto';
 import { RespostaErro } from '../../common/dto/resposta-erro.dto';
 import { ApiRespostaPaginada } from '../../common/decorators/api-resposta-paginada.decorator';
 import { RespostaPaginada } from '../../common/dto/resposta-paginada.dto';
@@ -35,6 +32,7 @@ import { UsuarioAutenticado } from '../../common/types/usuario-autenticado';
 import { ParticipacaoGuard } from '../monitorias/guards/participacao.guard';
 import { ContextoParticipacao } from '../monitorias/participacao.service';
 import { AtualizarMaterialDto } from './dto/atualizar-material.dto';
+import { FiltroMateriaisDto } from './dto/filtro-materiais.dto';
 import { CriarMaterialDto } from './dto/criar-material.dto';
 import { MaterialRespostaDto } from './dto/material-resposta.dto';
 import { MateriaisService } from './materiais.service';
@@ -68,19 +66,24 @@ export class MateriaisController {
     return this.materiaisService.publicar(contexto, dto, usuario);
   }
 
-  /** RN07: somente participantes autorizados acessam o acervo. */
+  /**
+   * RN07: somente participantes autorizados acessam o acervo.
+   *
+   * Todos os parametros de query vem de um unico DTO. Ler um deles com
+   * `@Query('chave')` a parte, ao lado de um `@Query() dto`, fazia a requisicao
+   * inteira ser recusada com 400: o ValidationPipe valida o objeto de query
+   * completo contra o DTO e `forbidNonWhitelisted` rejeita o que nao estiver
+   * declarado nele.
+   */
   @Get()
   @ExigeParticipacao()
   @ApiOperation({ summary: 'Lista os materiais da monitoria (RN07).' })
-  @ApiQuery({ name: 'incluirRemovidos', required: false, type: Boolean })
   @ApiRespostaPaginada(MaterialRespostaDto)
   listar(
     @Param('monitoriaId', ParseUUIDPipe) monitoriaId: string,
-    @Query() paginacao: PaginacaoDto,
-    @Query('incluirRemovidos', new ParseBoolPipe({ optional: true }))
-    incluirRemovidos?: boolean,
+    @Query() filtro: FiltroMateriaisDto,
   ): Promise<RespostaPaginada<MaterialRespostaDto>> {
-    return this.materiaisService.listar(monitoriaId, paginacao, incluirRemovidos ?? false);
+    return this.materiaisService.listar(monitoriaId, filtro);
   }
 
   @Get(':materialId')
