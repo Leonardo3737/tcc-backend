@@ -1,0 +1,309 @@
+@startuml classes-dominio
+' =====================================================================
+'  Diagrama de classes do dominio — Plataforma de Apoio a Monitoria
+'
+'  Extraido dos models em src/modules/**/entities/*.model.ts.
+'
+'  Regeneracao (requer plantuml.jar e Java 11+):
+'    java -jar plantuml.jar -tsvg docs/diagramas/classes-dominio.puml
+'    java -jar plantuml.jar -DSEM_ENUMS=1 -tsvg -o <destino> docs/diagramas/classes-dominio.puml
+'
+'  Convencoes adotadas:
+'   - chaves estrangeiras ESTRUTURAIS (monitoriaId, alunoId, ...) nao sao
+'     listadas como atributos: aparecem como associacoes;
+'   - chaves estrangeiras de AUTORIA/AUDITORIA (criadoPor, habilitadoPor,
+'     inscritoPor, alteradoPor, autor, removidoPor) permanecem como
+'     atributos e NAO viram associacoes. Todas referenciam Usuario; grafa-las
+'     produziria sete arestas cruzando o diagrama inteiro, sem acrescentar
+'     informacao estrutural. Ver a nota "Referencias de autoria";
+'   - createdAt/updatedAt sao omitidos (presentes em todas as classes,
+'     exceto AtendimentoStatusHistorico e PontuacaoEvento, que sao
+'     append-only);
+'   - os enums nao recebem linhas de associacao para evitar poluicao
+'     visual; sao referenciados pelo tipo dos atributos.
+' =====================================================================
+
+skinparam backgroundColor White
+skinparam shadowing false
+skinparam defaultFontName Arial
+skinparam defaultFontSize 11
+skinparam roundCorner 4
+skinparam linetype ortho
+
+skinparam class {
+  BackgroundColor White
+  BorderColor Black
+  ArrowColor Black
+  FontSize 11
+  AttributeFontSize 10
+  StereotypeFontSize 9
+}
+
+skinparam enum {
+  BackgroundColor #F2F2F2
+  BorderColor #555555
+  FontSize 10
+  AttributeFontSize 9
+}
+
+skinparam note {
+  BackgroundColor #FBFBEF
+  BorderColor #999999
+  FontSize 10
+}
+
+hide circle
+hide empty members
+
+' ---------------------------------------------------------------- IDENTIDADE
+
+class Usuario {
+  + id : UUID
+  + nome : String
+  + email : String <<unique>>
+  + senhaHash : String
+  + ativo : Boolean
+  --
+  + criadoPorUsuarioId : UUID [0..1]
+}
+
+class Aluno {
+  + usuarioId : UUID <<PK, FK>>
+  + matricula : String <<unique>>
+  + curso : String [0..1]
+}
+
+class Professor {
+  + usuarioId : UUID <<PK, FK>>
+  + identificacaoFuncional : String [0..1] <<unique>>
+  + departamento : String [0..1]
+}
+
+' ---------------------------------------------------------------- NUCLEO
+
+class Disciplina {
+  + id : UUID
+  + codigo : String <<unique>>
+  + nome : String
+  + ativa : Boolean
+}
+
+class Monitoria {
+  + id : UUID
+  + ano : Integer
+  + semestre : Integer
+  + descricao : String [0..1]
+  + status : StatusMonitoria
+  + dataInicio : Date [0..1]
+  + dataFim : Date [0..1]
+}
+
+class MonitoriaParticipante {
+  + id : UUID
+  + papel : PapelMonitoria
+  + status : StatusParticipacao
+  + ingressouEm : DateTime
+  + encerradoEm : DateTime [0..1]
+  --
+  + habilitadoPorUsuarioId : UUID [0..1]
+}
+
+class Disponibilidade {
+  + id : UUID
+  + diaSemana : Integer
+  + horaInicio : Time
+  + horaFim : Time
+  + ativa : Boolean
+}
+
+' ---------------------------------------------------------------- ATENDIMENTO
+
+class Atendimento {
+  + id : UUID
+  + inicio : DateTime
+  + fim : DateTime
+  + vagas : Integer
+  + modalidade : ModalidadeAtendimento
+  + local : String [0..1]
+  + assunto : String
+  + status : StatusAtendimento
+  + origem : OrigemAtendimento
+  + motivoCancelamento : String [0..1]
+  --
+  + criadoPorUsuarioId : UUID
+}
+
+class AtendimentoParticipante {
+  + id : UUID
+  + inicio : DateTime
+  + fim : DateTime
+  + status : StatusInscricao
+  + inscritoEm : DateTime
+  --
+  + inscritoPorUsuarioId : UUID
+}
+
+class AtendimentoStatusHistorico {
+  + id : UUID
+  + statusAnterior : StatusAtendimento [0..1]
+  + statusNovo : StatusAtendimento
+  + motivo : String [0..1]
+  + criadoEm : DateTime
+  --
+  + alteradoPorUsuarioId : UUID
+}
+
+class Avaliacao {
+  + id : UUID
+  + nota : Integer
+  + comentario : String [0..1]
+}
+
+' ---------------------------------------------------------- COMPLEMENTARES
+
+class Material {
+  + id : UUID
+  + titulo : String
+  + descricao : String [0..1]
+  + tipo : TipoMaterial
+  + url : String [0..1]
+  + removidoEm : DateTime [0..1]
+  --
+  + autorUsuarioId : UUID
+  + removidoPorUsuarioId : UUID [0..1]
+}
+
+class PontuacaoEvento {
+  + id : UUID
+  + tipo : TipoPontuacao
+  + pontos : Integer
+  + referenciaId : UUID
+  + criadoEm : DateTime
+}
+
+' ---------------------------------------------------------------- ENUMS
+'
+'  Renderizar com -DSEM_ENUMS=1 omite este bloco. A versao sem enums fica
+'  ~38% mais estreita (8,2 pol contra 13,2), o que a torna legivel quando
+'  reduzida a largura de uma coluna. Nesse caso, os valores devem constar de
+'  uma tabela no texto do artigo.
+
+!ifndef SEM_ENUMS
+
+enum PapelMonitoria {
+  MONITOR
+  MONITORADO
+}
+
+enum StatusMonitoria {
+  PLANEJADA
+  ATIVA
+  ENCERRADA
+  CANCELADA
+}
+
+enum StatusParticipacao {
+  ATIVO
+  ENCERRADO
+}
+
+enum StatusAtendimento {
+  AGENDADO
+  REALIZADO
+  CANCELADO
+}
+
+enum StatusInscricao {
+  INSCRITO
+  PRESENTE
+  AUSENTE
+  CANCELADA
+}
+
+enum ModalidadeAtendimento {
+  PRESENCIAL
+  REMOTO
+}
+
+enum OrigemAtendimento {
+  SOLICITACAO_ALUNO
+  OFERTA_MONITOR
+}
+
+enum TipoMaterial {
+  LINK
+  ARQUIVO
+}
+
+enum TipoPontuacao {
+  ATENDIMENTO_REALIZADO
+  PARTICIPACAO_ATENDIMENTO
+  AVALIACAO_RECEBIDA
+}
+
+!endif
+
+' ---------------------------------------------------------- ASSOCIACOES
+
+Usuario "1" -- "0..1" Aluno
+Usuario "1" -- "0..1" Professor
+
+Disciplina "1" -- "0..*" Monitoria
+Professor "1" -- "0..*" Monitoria : responsavel por >
+
+Monitoria "1" -- "0..*" MonitoriaParticipante
+Aluno "1" -- "0..*" MonitoriaParticipante : participa como >
+
+MonitoriaParticipante "1" -- "0..*" Disponibilidade : declara >
+
+Monitoria "1" -- "0..*" Atendimento
+MonitoriaParticipante "1" -- "0..*" Atendimento : conduz >
+
+Atendimento "1" -- "0..*" AtendimentoParticipante : reune >
+MonitoriaParticipante "1" -- "0..*" AtendimentoParticipante : inscreve-se em >
+
+Atendimento "1" -- "1..*" AtendimentoStatusHistorico : registra >
+
+AtendimentoParticipante "1" -- "0..1" Avaliacao : origina >
+
+Monitoria "1" -- "0..*" Material
+
+Usuario "1" -- "0..*" PontuacaoEvento
+Monitoria "1" -- "0..*" PontuacaoEvento
+
+' ---------------------------------------------------------------- NOTAS
+
+note top of MonitoriaParticipante
+  **Nucleo do modelo.**
+  MONITOR e MONITORADO nao sao classes nem
+  tipos de usuario: sao valores do atributo
+  //papel//, que so existe no contexto de uma
+  monitoria. O mesmo aluno pode ser MONITOR
+  em uma monitoria e MONITORADO em outra.
+end note
+
+note left of Usuario
+  Nao ha atributo de perfil. ALUNO e
+  PROFESSOR sao //derivados// da existencia
+  das especializacoes, e um mesmo usuario
+  pode acumular as duas.
+end note
+
+note as ReferenciasDeAutoria
+  **Referencias de autoria.**
+  Os atributos abaixo da linha divisoria em
+  //Usuario//, //MonitoriaParticipante//, //Atendimento//,
+  //AtendimentoParticipante//, //AtendimentoStatusHistorico//
+  e //Material// sao chaves estrangeiras para //Usuario//.
+  Estao grafados como atributos, e nao como
+  associacoes, para preservar a legibilidade.
+end note
+
+note bottom of AtendimentoParticipante
+  //inicio// e //fim// sao copias propagadas do
+  atendimento pelo banco (FK composta com
+  ON UPDATE CASCADE). Viabilizam a restricao
+  de sobreposicao de horarios do aluno.
+end note
+
+@enduml

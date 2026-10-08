@@ -1,0 +1,243 @@
+' =====================================================================
+'  Diagramas de casos de uso — Plataforma de Apoio a Monitoria
+'
+'  Derivados da autorizacao real das 58 rotas dos controllers em
+'  src/modules/**/*.controller.ts (decorators @Publico, @Perfis e
+'  @ExigeParticipacao).
+'
+'  Regeneracao (requer plantuml.jar e Java 11+):
+'    java -jar plantuml.jar -tsvg docs/diagramas/casos-de-uso.puml
+'  Gera tres arquivos, um por bloco @startuml.
+'
+'  ---------------------------------------------------------------------
+'  Por que TRES diagramas e nao um
+'
+'  Sao 7 atores e 32 casos de uso. Em uma unica figura o resultado mede
+'  15,6 pol de largura (ou 8,2 x 23,9 pol sem a coluna de casos
+'  incluidos) — reduzido para a largura de uma pagina, o texto cai para
+'  4,4pt. A UML preve o particionamento de casos de uso por area
+'  funcional; atores repetidos entre diagramas sao o mesmo ator.
+'
+'  ---------------------------------------------------------------------
+'  Convencoes adotadas
+'
+'   - casos de uso representam OBJETIVOS do ator, nao operacoes da API;
+'     as 58 rotas foram agrupadas em 32 casos de uso;
+'
+'   - MONITOR e MONITORADO sao atores porque, em UML, ator e um PAPEL —
+'     nao uma pessoa nem um tipo de usuario. Isso e coerente com o
+'     diagrama de classes, onde os dois sao valores do atributo
+'     MonitoriaParticipante.papel;
+'
+'   - "Professor Responsavel" especializa "Professor" porque o sistema
+'     distingue os dois: @Perfis(PROFESSOR) libera qualquer professor,
+'     enquanto professorResponsavel: 'EXIGIDO' exige ser o responsavel
+'     por AQUELA monitoria (base da RN01);
+'
+'   - GET /api/configuracao nao aparece: e endpoint de metadados para o
+'     cliente, nao um objetivo de usuario.
+' =====================================================================
+
+
+' ###################################################################
+' # FIGURA 1 — Acesso e administracao da plataforma
+' ###################################################################
+@startuml casos-de-uso-1-acesso
+!include estilo-uml.iuml
+left to right direction
+
+title Casos de uso — acesso e administracao da plataforma
+
+actor "Visitante" as Visitante
+actor "Usuario\nAutenticado" as Usuario
+actor "Aluno" as Aluno
+actor "Professor" as Professor
+
+Aluno --|> Usuario
+Professor --|> Usuario
+
+rectangle "Plataforma de Apoio a Monitoria" {
+  usecase "Autenticar-se" as UC01
+  usecase "Cadastrar-se\ncomo aluno" as UC02
+  usecase "Cadastrar-se\ncomo professor" as UC03
+
+  usecase "Manter a\npropria conta" as UC04
+  usecase "Explorar monitorias\nofertadas" as UC05
+  usecase "Consultar pontuacao\ne ranking" as UC06
+  usecase "Consultar\nagenda pessoal" as UC07
+
+  usecase "Manter catalogo\nde disciplinas" as UC08
+  usecase "Cadastrar usuarios\nda plataforma" as UC09
+  usecase "Criar monitoria" as UC10
+  usecase "Consultar indicadores\nda plataforma" as UC11
+}
+
+Visitante -- UC01
+Visitante -- UC02
+Visitante -- UC03
+
+Usuario -- UC04
+Usuario -- UC05
+Usuario -- UC06
+Usuario -- UC07
+
+Professor -- UC08
+Professor -- UC09
+Professor -- UC10
+Professor -- UC11
+
+legend bottom
+  **Cadastrar-se como professor** exige codigo de cadastro quando configurado.
+  Em producao o codigo e obrigatorio: sem ele a aplicacao nao sobe.
+
+  **Cadastrar usuarios da plataforma** — nao ha perfil ADMIN: sao os professores
+  que administram os usuarios. A autoria de cada conta criada fica registrada.
+endlegend
+
+@enduml
+
+
+' ###################################################################
+' # FIGURA 2 — Gestao da monitoria e participacao
+' ###################################################################
+@startuml casos-de-uso-2-monitoria
+!include estilo-uml.iuml
+left to right direction
+
+title Casos de uso — gestao da monitoria e participacao
+
+actor "Aluno" as Aluno
+actor "Monitor" as Monitor
+actor "Monitorado" as Monitorado
+actor "Professor" as Professor
+actor "Professor\nResponsavel" as Responsavel
+
+Monitor --|> Aluno
+Monitorado --|> Aluno
+Responsavel --|> Professor
+
+rectangle "Plataforma de Apoio a Monitoria" {
+  usecase "Gerenciar ciclo de\nvida da monitoria" as UC12
+  usecase "Habilitar monitor" as UC13
+  usecase "Inscrever monitorado" as UC14
+  usecase "Inscrever-se\nem monitoria" as UC15
+  usecase "Encerrar participacao" as UC16
+
+  usecase "Declarar\ndisponibilidade" as UC17
+  usecase "Manter materiais\nda monitoria" as UC18
+  usecase "Consultar conteudo\nda monitoria" as UC19
+
+  usecase "Consultar indicadores\nda monitoria" as UC20
+  usecase "Consultar atividade\ndos monitores" as UC21
+}
+
+Responsavel -- UC12
+Responsavel -- UC13
+Responsavel -- UC14
+Responsavel -- UC16
+Responsavel -- UC18
+Responsavel -- UC19
+Responsavel -- UC20
+Responsavel -- UC21
+
+Aluno -- UC15
+Aluno -- UC16
+
+Monitor -- UC17
+Monitor -- UC18
+Monitor -- UC19
+Monitor -- UC20
+
+Monitorado -- UC19
+Monitorado -- UC20
+
+legend bottom
+  **Habilitar monitor (RN01).** Somente o professor responsavel habilita um aluno
+  como MONITOR. E este ato que cria o papel.
+
+  **Inscrever-se em monitoria (RN09).** Um aluno nao pode assumir os dois papeis
+  na mesma monitoria.
+
+  **Declarar disponibilidade** e exclusivo do Monitor: o professor administra a
+  monitoria, mas nao possui agenda de atendimento.
+endlegend
+
+@enduml
+
+
+' ###################################################################
+' # FIGURA 3 — Ciclo do atendimento
+' ###################################################################
+@startuml casos-de-uso-3-atendimento
+!include estilo-uml.iuml
+left to right direction
+
+title Casos de uso — ciclo do atendimento
+
+actor "Monitor" as Monitor
+actor "Monitorado" as Monitorado
+actor "Professor\nResponsavel" as Responsavel
+
+rectangle "Plataforma de Apoio a Monitoria" {
+  usecase "Abrir sessao\nde atendimento" as UC22
+  usecase "Solicitar\natendimento" as UC23
+  usecase "Inscrever-se\nem atendimento" as UC24
+  usecase "Cancelar\ninscricao" as UC25
+  usecase "Registrar realizacao\ndo atendimento" as UC26
+  usecase "Reagendar\natendimento" as UC27
+  usecase "Cancelar\natendimento" as UC28
+  usecase "Avaliar atendimento" as UC29
+
+  usecase "Validar disponibilidade\ndo monitor" as UC30
+  usecase "Registrar transicao\nno historico" as UC31
+  usecase "Registrar presenca\ndos inscritos" as UC32
+  usecase "Conceder pontuacao" as UC33
+}
+
+Monitor -- UC22
+Monitor -- UC26
+Monitor -- UC27
+Monitor -- UC28
+
+Monitorado -- UC23
+Monitorado -- UC24
+Monitorado -- UC25
+Monitorado -- UC29
+
+Responsavel -- UC26
+Responsavel -- UC27
+Responsavel -- UC28
+
+' <<include>>: o comportamento incluido SEMPRE ocorre; a seta parte do
+' caso base para o caso incluido.
+UC22 ..> UC30 : <<include>>
+UC23 ..> UC30 : <<include>>
+UC27 ..> UC30 : <<include>>
+
+UC22 ..> UC31 : <<include>>
+UC23 ..> UC31 : <<include>>
+UC26 ..> UC31 : <<include>>
+UC27 ..> UC31 : <<include>>
+UC28 ..> UC31 : <<include>>
+
+UC26 ..> UC32 : <<include>>
+
+' <<extend>>: comportamento OPCIONAL; a seta parte do caso que estende
+' para o caso base. A pontuacao e concedida por evento — o atendimento e
+' a avaliacao permanecem validos se ela falhar.
+UC33 ..> UC26 : <<extend>>
+UC33 ..> UC29 : <<extend>>
+
+legend bottom
+  **Solicitar atendimento** e recusado em caso de conflito de horario (RN03),
+  quando o aluno nao participa da monitoria (RN04) ou quando o horario esta fora
+  da disponibilidade declarada.
+
+  **Avaliar atendimento (RN05 e RN06).** Somente o monitorado com presenca
+  confirmada avalia, e apenas apos o atendimento ser concluido.
+
+  **Registrar transicao no historico (RN10).** Toda transicao de status gera um
+  registro imutavel: nada e sobrescrito nem removido.
+endlegend
+
+@enduml

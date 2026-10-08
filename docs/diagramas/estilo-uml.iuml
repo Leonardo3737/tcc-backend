@@ -1,0 +1,38 @@
+' Estilo comum aos diagramas UML do projeto.
+' Incluir com:  !include estilo-uml.iuml
+
+' Motor de layout. O padrao do PlantUML deixa atores soltos abaixo da
+' fronteira do sistema e gera associacoes em arcos longos; o smetana
+' organiza em colunas e produziu um diagrama ~25% menor nos testes.
+' (ELK, a outra alternativa, lanca excecao neste jar.)
+!pragma layout smetana
+
+skinparam backgroundColor White
+skinparam shadowing false
+skinparam defaultFontName Arial
+skinparam defaultFontSize 12
+
+skinparam actor {
+  BackgroundColor White
+  BorderColor Black
+  FontSize 12
+}
+
+skinparam usecase {
+  BackgroundColor White
+  BorderColor Black
+  ArrowColor Black
+  FontSize 11
+}
+
+skinparam rectangle {
+  BackgroundColor White
+  BorderColor #444444
+  FontSize 13
+}
+
+skinparam note {
+  BackgroundColor #FBFBEF
+  BorderColor #999999
+  FontSize 10
+}
