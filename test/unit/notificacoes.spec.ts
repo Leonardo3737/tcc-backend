@@ -1,6 +1,7 @@
 import { UniqueConstraintError } from 'sequelize';
 
 import { OrigemAtendimento } from '../../src/common/enums/origem-atendimento.enum';
+import { PapelMonitoria } from '../../src/common/enums/papel-monitoria.enum';
 import { TipoNotificacao } from '../../src/common/enums/tipo-notificacao.enum';
 import {
   AtendimentoCanceladoEvento,
@@ -30,7 +31,7 @@ const FUSO = 'America/Porto_Velho'; // UTC-4, igual ao .env do projeto
 const ATENDIMENTO = {
   atendimentoId: 'a-1',
   monitoriaId: 'm-1',
-  disciplina: 'Calculo I',
+  disciplina: 'Banco de Dados',
   inicio: new Date('2026-10-14T19:00:00Z'),
   fim: new Date('2026-10-14T20:00:00Z'),
   modalidade: 'PRESENCIAL',
@@ -479,5 +480,92 @@ describe('O link que chega no corpo despachado', () => {
     await service.aoHabilitarMonitor(new MonitorHabilitadoEvento('p-1', 'm-1', 'u-ana'));
 
     expect(String(criadas[0].corpo)).toContain('/monitorias/m-1');
+  });
+});
+
+/**
+ * O mesmo fato, dois textos.
+ *
+ * O defeito que isto evita e concreto: dizer "cancele sua inscricao" a quem
+ * CONDUZ o atendimento e instrucao impossivel — ele nao tem inscricao — e
+ * informar "Monitor(a): Ana" num e-mail enderecado a Ana denuncia uma mensagem
+ * escrita para outra pessoa.
+ */
+describe('LEMBRETE_DIA — monitor e monitorado recebem textos diferentes', () => {
+  function lembrete(papel?: PapelMonitoria, inscritos?: number) {
+    return MENSAGENS[TipoNotificacao.LEMBRETE_DIA]({
+      nome: papel === PapelMonitoria.MONITOR ? 'Ana Monitora' : 'Bruno',
+      dados: ATENDIMENTO,
+      fuso: FUSO,
+      link: 'http://localhost:3001/atendimentos/a-1',
+      papel,
+      inscritos,
+    });
+  }
+
+  it('ao monitorado: mostra quem e o monitor e como desistir', () => {
+    const { assunto, corpo } = lembrete(PapelMonitoria.MONITORADO);
+
+    expect(assunto).toContain('voce tem atendimento hoje');
+    expect(corpo).toContain('Monitor(a): Ana Monitora');
+    expect(corpo).toContain('cancele sua inscricao');
+  });
+
+  it('ao monitor: omite a linha do monitor e nao manda cancelar inscricao', () => {
+    const { assunto, corpo } = lembrete(PapelMonitoria.MONITOR, 3);
+
+    expect(assunto).toContain('voce conduz um atendimento hoje');
+    expect(corpo).not.toContain('Monitor(a):');
+    expect(corpo).not.toContain('cancele sua inscricao');
+  });
+
+  /** O dado que muda o que o monitor faz: preparar para um ou para oito. */
+  it('ao monitor: informa quantos inscritos', () => {
+    expect(lembrete(PapelMonitoria.MONITOR, 3).corpo).toContain('Inscritos: 3');
+  });
+
+  it('ao monitor sem ninguem inscrito: diz isso em palavras e sugere cancelar', () => {
+    const { corpo } = lembrete(PapelMonitoria.MONITOR, 0);
+
+    expect(corpo).toContain('nenhum ate agora');
+    expect(corpo).toContain('cancelar');
+    expect(corpo).not.toContain('Inscritos: 0');
+  });
+
+  /** Sem papel informado, cai no texto do monitorado — o caso mais comum. */
+  it('sem papel, usa o texto do monitorado', () => {
+    expect(lembrete().corpo).toContain('cancele sua inscricao');
+  });
+
+  it('os dois textos mantem data, disciplina e link', () => {
+    for (const papel of [PapelMonitoria.MONITOR, PapelMonitoria.MONITORADO]) {
+      const { corpo } = lembrete(papel, 2);
+
+      expect(corpo).toContain('Banco de Dados');
+      expect(corpo).toContain('15:00');
+      expect(corpo).toContain('/atendimentos/a-1');
+    }
+  });
+});
+
+describe('O despacho do lembrete separa os dois lados', () => {
+  it('monitor e inscritos recebem em despachos distintos, com papeis distintos', async () => {
+    const { service, criadas } = montar({
+      consultas: [
+        [{ id: 'a-1' }], // atendimentos de hoje
+        [ATENDIMENTO], // contexto
+        [destinatario('u-bruno', 'Bruno'), destinatario('u-carla', 'Carla')], // inscritos
+        [destinatario('u-monitor', 'Ana Monitora')], // monitor
+      ],
+    });
+
+    await service.lembrarAtendimentosDeHoje();
+
+    const porUsuario = new Map(criadas.map((c) => [c.usuarioId, String(c.corpo)]));
+
+    expect(porUsuario.get('u-monitor')).toContain('Inscritos: 2');
+    expect(porUsuario.get('u-monitor')).not.toContain('cancele sua inscricao');
+    expect(porUsuario.get('u-bruno')).toContain('cancele sua inscricao');
+    expect(porUsuario.get('u-carla')).toContain('cancele sua inscricao');
   });
 });
