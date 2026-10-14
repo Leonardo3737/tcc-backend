@@ -135,7 +135,7 @@ explicitamente do que descobrir em produção que `JWT_SECRET` estava vazio.
 | `PORT` | não | Porta HTTP (padrão `3000`) |
 | `API_PREFIX` | não | Prefixo global das rotas (padrão `api`) |
 | `CORS_ORIGINS` | não | Origens liberadas, separadas por vírgula. **Vazio = CORS fechado** |
-| `URL_FRONT` | não | Base dos links enviados nos e-mails. Padrão `http://localhost:3001`. Barra final é ignorada |
+| `URL_FRONT` | não | Base dos links enviados nos e-mails (notificações **e** criação de conta). Padrão `http://localhost:3001`. Barra final é ignorada |
 | `DB_HOST` `DB_PORT` `DB_NAME` `DB_USER` `DB_PASSWORD` | **sim** | Conexão PostgreSQL |
 | `DB_LOGGING` | não | `true` imprime o SQL gerado |
 | `JWT_SECRET` | **sim** | Mínimo de 32 caracteres |
@@ -222,7 +222,7 @@ sem `Bearer`). O `persistAuthorization` mantém o token entre recarregamentos.
 npm run test
 ```
 
-203 testes de unidade, sem banco, cobrindo o que o PostgreSQL **não** alcança:
+250 testes de unidade, sem banco, cobrindo o que o PostgreSQL **não** alcança:
 autorização, papéis, transições de estado, propriedade de recurso, campos
 derivados e tradução de erro.
 
@@ -892,6 +892,12 @@ pessoas, sendo que a dona não tinha como saber se a outra a havia esquecido.
 Agora a senha é gerada com `randomBytes` (CSPRNG, 12 caracteres em `base64url`,
 sem `+ / =` que quebram ao copiar de um e-mail) e entregue direto no e-mail
 cadastrado.
+
+O e-mail termina com o link de acesso ao sistema, montado a partir de
+`URL_FRONT`. Ele aponta para a **raiz**, não para `/login`: uma aplicação
+autenticada redireciona quem não tem sessão para o próprio login, então a raiz
+sempre funciona — `/login` seria palpite sobre uma rota do frontend, e link
+quebrado em e-mail não tem conserto depois de enviado.
 
 **Se o e-mail não puder ser entregue, a conta não é criada** — `503`, e o
 registro é desfeito. Isso contraria a política geral de que e-mail não derruba
