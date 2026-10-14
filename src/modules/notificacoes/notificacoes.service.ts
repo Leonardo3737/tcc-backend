@@ -7,6 +7,7 @@ import { Op, QueryTypes, UniqueConstraintError } from 'sequelize';
 import { Sequelize } from 'sequelize-typescript';
 
 import { OrigemAtendimento } from '../../common/enums/origem-atendimento.enum';
+import { PapelMonitoria } from '../../common/enums/papel-monitoria.enum';
 import { TipoNotificacao } from '../../common/enums/tipo-notificacao.enum';
 import { EmailService } from '../email/email.service';
 import { AtendimentoRealizadoEvento, EVENTO_ATENDIMENTO_REALIZADO } from '../gamificacao/eventos';
@@ -30,6 +31,27 @@ interface Destinatario {
   usuarioId: string;
   nome: string;
   email: string;
+}
+
+/**
+ * Um despacho. Objeto, e nao parametros posicionais, porque sao sete campos e
+ * tres deles opcionais — a chamada ficaria ilegivel em qualquer outra forma.
+ */
+interface PedidoDeDespacho {
+  tipo: TipoNotificacao;
+  /** Chave de idempotencia. NEM SEMPRE e o destino do link. */
+  referenciaId: string;
+  destinatarios: Destinatario[];
+  dados: DadosDoAtendimento;
+  /**
+   * De onde sai o LINK: em avisos de transicao a `referenciaId` e a linha de
+   * historico, que nao corresponde a pagina nenhuma.
+   */
+  referenciasDeLink: ReferenciasDeLink;
+  motivo?: string;
+  /** Papel de quem recebe. Hoje so o lembrete do dia muda o texto por ele. */
+  papel?: PapelMonitoria;
+  inscritos?: number;
 }
 
 interface ContextoDeAtendimento extends DadosDoAtendimento {
@@ -104,25 +126,25 @@ export class NotificacoesService implements OnModuleInit {
       if (evento.origem === OrigemAtendimento.SOLICITACAO_ALUNO) {
         const monitor = await this.usuarios([contexto.monitorUsuarioId], evento.autorUsuarioId);
 
-        await this.despachar(
-          TipoNotificacao.ATENDIMENTO_SOLICITADO,
-          contexto.atendimentoId,
-          monitor,
-          contexto,
-          { atendimentoId: contexto.atendimentoId },
-        );
+        await this.despachar({
+          tipo: TipoNotificacao.ATENDIMENTO_SOLICITADO,
+          referenciaId: contexto.atendimentoId,
+          destinatarios: monitor,
+          dados: contexto,
+          referenciasDeLink: { atendimentoId: contexto.atendimentoId },
+        });
         return;
       }
 
       const monitorados = await this.monitoradosAtivos(contexto.monitoriaId, evento.autorUsuarioId);
 
-      await this.despachar(
-        TipoNotificacao.ATENDIMENTO_OFERTADO,
-        contexto.atendimentoId,
-        monitorados,
-        contexto,
-        { atendimentoId: contexto.atendimentoId },
-      );
+      await this.despachar({
+        tipo: TipoNotificacao.ATENDIMENTO_OFERTADO,
+        referenciaId: contexto.atendimentoId,
+        destinatarios: monitorados,
+        dados: contexto,
+        referenciasDeLink: { atendimentoId: contexto.atendimentoId },
+      });
     });
   }
 
@@ -153,14 +175,14 @@ export class NotificacoesService implements OnModuleInit {
         evento.autorUsuarioId,
       );
 
-      await this.despachar(
-        TipoNotificacao.ATENDIMENTO_CANCELADO,
-        evento.historicoId,
+      await this.despachar({
+        tipo: TipoNotificacao.ATENDIMENTO_CANCELADO,
+        referenciaId: evento.historicoId,
         destinatarios,
-        contexto,
-        { atendimentoId: contexto.atendimentoId },
-        evento.motivo,
-      );
+        dados: contexto,
+        referenciasDeLink: { atendimentoId: contexto.atendimentoId },
+        motivo: evento.motivo,
+      });
     });
   }
 
@@ -175,13 +197,13 @@ export class NotificacoesService implements OnModuleInit {
 
       const destinatarios = await this.envolvidos(contexto, evento.autorUsuarioId);
 
-      await this.despachar(
-        TipoNotificacao.ATENDIMENTO_REAGENDADO,
-        evento.historicoId,
+      await this.despachar({
+        tipo: TipoNotificacao.ATENDIMENTO_REAGENDADO,
+        referenciaId: evento.historicoId,
         destinatarios,
-        contexto,
-        { atendimentoId: contexto.atendimentoId },
-      );
+        dados: contexto,
+        referenciasDeLink: { atendimentoId: contexto.atendimentoId },
+      });
     });
   }
 
@@ -202,13 +224,13 @@ export class NotificacoesService implements OnModuleInit {
 
       const destinatarios = await this.usuarios([evento.alunoUsuarioId]);
 
-      await this.despachar(
-        TipoNotificacao.MONITOR_HABILITADO,
-        evento.participanteId,
+      await this.despachar({
+        tipo: TipoNotificacao.MONITOR_HABILITADO,
+        referenciaId: evento.participanteId,
         destinatarios,
-        { ...this.contextoVazio(), disciplina: linha.disciplina },
-        { monitoriaId: evento.monitoriaId },
-      );
+        dados: { ...this.contextoVazio(), disciplina: linha.disciplina },
+        referenciasDeLink: { monitoriaId: evento.monitoriaId },
+      });
     });
   }
 
@@ -246,13 +268,13 @@ export class NotificacoesService implements OnModuleInit {
       );
 
       for (const presente of presentes) {
-        await this.despachar(
-          TipoNotificacao.AVALIACAO_PENDENTE,
-          presente.inscricaoId,
-          [presente],
-          contexto,
-          { atendimentoId: contexto.atendimentoId },
-        );
+        await this.despachar({
+          tipo: TipoNotificacao.AVALIACAO_PENDENTE,
+          referenciaId: presente.inscricaoId,
+          destinatarios: [presente],
+          dados: contexto,
+          referenciasDeLink: { atendimentoId: contexto.atendimentoId },
+        });
       }
     });
   }
@@ -299,10 +321,32 @@ export class NotificacoesService implements OnModuleInit {
           continue;
         }
 
-        const destinatarios = await this.envolvidos(contexto);
+        /**
+         * Monitor e inscritos sao buscados SEPARADAMENTE, e nao por
+         * `envolvidos`, porque recebem textos diferentes: um conduz, os outros
+         * comparecem. O numero de inscritos sai de graca daqui e e justamente
+         * o dado que falta ao monitor para se preparar.
+         */
+        const inscritos = await this.inscritosAtivos(id);
+        const monitor = await this.usuarios([contexto.monitorUsuarioId]);
 
-        await this.despachar(TipoNotificacao.LEMBRETE_DIA, id, destinatarios, contexto, {
-          atendimentoId: id,
+        await this.despachar({
+          tipo: TipoNotificacao.LEMBRETE_DIA,
+          referenciaId: id,
+          destinatarios: monitor,
+          dados: contexto,
+          referenciasDeLink: { atendimentoId: id },
+          papel: PapelMonitoria.MONITOR,
+          inscritos: inscritos.length,
+        });
+
+        await this.despachar({
+          tipo: TipoNotificacao.LEMBRETE_DIA,
+          referenciaId: id,
+          destinatarios: inscritos,
+          dados: contexto,
+          referenciasDeLink: { atendimentoId: id },
+          papel: PapelMonitoria.MONITORADO,
         });
       }
     });
@@ -344,19 +388,9 @@ export class NotificacoesService implements OnModuleInit {
    * simplesmente nao envia. Se a ordem fosse "enviar e depois registrar", as
    * duas enviariam antes de descobrir a duplicata.
    */
-  private async despachar(
-    tipo: TipoNotificacao,
-    referenciaId: string,
-    destinatarios: Destinatario[],
-    dados: DadosDoAtendimento,
-    /**
-     * De onde sai o LINK, que nem sempre e `referenciaId`: em avisos de
-     * transicao a referencia e a linha de historico, que nao e uma pagina.
-     */
-    referenciasDeLink: ReferenciasDeLink,
-    extra?: string,
-  ): Promise<void> {
-    const link = montarLink(tipo, referenciasDeLink, this.urlFront());
+  private async despachar(pedido: PedidoDeDespacho): Promise<void> {
+    const { tipo, referenciaId, destinatarios, dados } = pedido;
+    const link = montarLink(tipo, pedido.referenciasDeLink, this.urlFront());
 
     for (const destinatario of destinatarios) {
       const { assunto, corpo } = MENSAGENS[tipo]({
@@ -364,7 +398,9 @@ export class NotificacoesService implements OnModuleInit {
         dados,
         fuso: this.fuso(),
         link,
-        motivo: extra,
+        motivo: pedido.motivo,
+        papel: pedido.papel,
+        inscritos: pedido.inscritos,
       });
 
       let notificacao: Notificacao;
@@ -426,12 +462,15 @@ export class NotificacoesService implements OnModuleInit {
 
   // ------------------------------------------------------------- DESTINATARIOS
 
-  /** Monitor + inscritos ativos. Quem agiu nao recebe aviso do proprio ato. */
-  private async envolvidos(
-    contexto: ContextoDeAtendimento,
-    excluirUsuarioId?: string,
-  ): Promise<Destinatario[]> {
-    const inscritos = await this.consultar<Destinatario>(
+  /**
+   * Quem esta inscrito e vai comparecer.
+   *
+   * Extraido de `envolvidos` porque o lembrete do dia precisa dos inscritos
+   * SEPARADOS do monitor: os dois recebem textos diferentes, e o numero de
+   * inscritos entra no texto do monitor.
+   */
+  private async inscritosAtivos(atendimentoId: string): Promise<Destinatario[]> {
+    return this.consultar<Destinatario>(
       `SELECT u.id AS "usuarioId", u.nome AS nome, u.email::text AS email
          FROM atendimento_participantes ap
          JOIN monitoria_participantes mp ON mp.id = ap.participante_id
@@ -439,13 +478,19 @@ export class NotificacoesService implements OnModuleInit {
         WHERE ap.atendimento_id = :atendimentoId
           AND ap.status = 'INSCRITO'
           AND u.ativo = true`,
-      { atendimentoId: contexto.atendimentoId },
+      { atendimentoId },
     );
+  }
 
+  /** Monitor + inscritos ativos. Quem agiu nao recebe aviso do proprio ato. */
+  private async envolvidos(
+    contexto: ContextoDeAtendimento,
+    excluirUsuarioId?: string,
+  ): Promise<Destinatario[]> {
+    const inscritos = await this.inscritosAtivos(contexto.atendimentoId);
     const monitor = await this.usuarios([contexto.monitorUsuarioId]);
-    const todos = [...monitor, ...inscritos];
 
-    return this.semRepetir(todos, excluirUsuarioId);
+    return this.semRepetir([...monitor, ...inscritos], excluirUsuarioId);
   }
 
   private async monitoradosAtivos(

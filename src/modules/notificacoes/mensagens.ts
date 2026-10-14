@@ -1,3 +1,4 @@
+import { PapelMonitoria } from '../../common/enums/papel-monitoria.enum';
 import { TipoNotificacao } from '../../common/enums/tipo-notificacao.enum';
 
 /**
@@ -44,12 +45,22 @@ export function formatarHora(data: Date, fuso: string): string {
   }).format(data);
 }
 
-/** Bloco comum a todo aviso sobre um atendimento. */
-function blocoDoAtendimento(dados: DadosDoAtendimento, fuso: string): string[] {
+/**
+ * Bloco comum a todo aviso sobre um atendimento.
+ *
+ * `incluirMonitor` existe para o unico caso em que a linha atrapalha: quando
+ * quem le E o monitor. "Monitor(a): Ana Monitora" num e-mail enderecado a Ana
+ * nao informa nada e denuncia uma mensagem escrita para outra pessoa.
+ */
+function blocoDoAtendimento(
+  dados: DadosDoAtendimento,
+  fuso: string,
+  incluirMonitor = true,
+): string[] {
   const linhas = [
     `Disciplina: ${dados.disciplina}`,
     `Quando: ${formatarDataHora(dados.inicio, fuso)} as ${formatarHora(dados.fim, fuso)}`,
-    `Monitor(a): ${dados.monitor}`,
+    ...(incluirMonitor ? [`Monitor(a): ${dados.monitor}`] : []),
     `Modalidade: ${dados.modalidade}`,
   ];
 
@@ -125,6 +136,71 @@ export interface ContextoDaMensagem {
   /** Ja pronto: a regra de URL mora em `montarLink`, nao nos textos. */
   link: string;
   motivo?: string;
+
+  /**
+   * Papel de QUEM RECEBE, nao de quem conduz.
+   *
+   * O mesmo aviso chega aos dois lados do atendimento, e eles precisam de
+   * coisas diferentes: o monitorado precisa saber onde comparecer e como
+   * desistir; o monitor precisa saber quantas pessoas esperar e que mexer no
+   * horario avisa todo mundo. Nao viraram dois tipos no enum porque e o mesmo
+   * fato — e a chave de idempotencia ja separa por usuario.
+   */
+  papel?: PapelMonitoria;
+
+  /** Quantos monitorados confirmados. So interessa ao monitor. */
+  inscritos?: number;
+}
+
+/**
+ * Lembrete para quem VAI SER ATENDIDO.
+ *
+ * Mantem a linha "Monitor(a)", que para o monitorado e informacao util, e
+ * fecha com a instrucao que lhe cabe: desistir libera a vaga para outro.
+ */
+function lembreteDoMonitorado({ nome, dados, fuso, link }: ContextoDaMensagem): Mensagem {
+  return {
+    assunto: `Lembrete: voce tem atendimento hoje (${dados.disciplina})`,
+    corpo: [
+      `Ola, ${nome}.`,
+      '',
+      'Voce tem um atendimento de monitoria HOJE:',
+      '',
+      ...blocoDoAtendimento(dados, fuso),
+      '',
+      'Se nao puder comparecer, cancele sua inscricao para liberar a vaga.',
+      ...acesse('Ver atendimento', link),
+    ].join('\n'),
+  };
+}
+
+/**
+ * Lembrete para quem VAI ATENDER.
+ *
+ * Omite a linha "Monitor(a)" — e ele — e acrescenta o numero de inscritos, que
+ * e o dado que muda o que ele faz: decidir se prepara material para um ou para
+ * oito, ou se vale cancelar quando ninguem se inscreveu.
+ */
+function lembreteDoMonitor({ nome, dados, fuso, link, inscritos }: ContextoDaMensagem): Mensagem {
+  const quantos = inscritos ?? 0;
+
+  return {
+    assunto: `Lembrete: voce conduz um atendimento hoje (${dados.disciplina})`,
+    corpo: [
+      `Ola, ${nome}.`,
+      '',
+      'Voce conduz um atendimento de monitoria HOJE:',
+      '',
+      ...blocoDoAtendimento(dados, fuso, false),
+      `Inscritos: ${quantos === 0 ? 'nenhum ate agora' : quantos}`,
+      '',
+      quantos === 0
+        ? 'Ninguem se inscreveu ate o momento. Se preferir cancelar, faca pela plataforma.'
+        : 'Se precisar cancelar ou mudar o horario, faca pela plataforma: os inscritos',
+      ...(quantos === 0 ? [] : ['sao avisados automaticamente.']),
+      ...acesse('Ver atendimento', link),
+    ].join('\n'),
+  };
 }
 
 /** Chamada para acao, sempre no fim e sempre em linha propria. */
@@ -140,19 +216,18 @@ function acesse(rotulo: string, link: string): string[] {
  * o enum crescer, em vez de deixar passar um `default` silencioso.
  */
 export const MENSAGENS: Record<TipoNotificacao, (contexto: ContextoDaMensagem) => Mensagem> = {
-  [TipoNotificacao.LEMBRETE_DIA]: ({ nome, dados, fuso, link }) => ({
-    assunto: `Lembrete: voce tem atendimento hoje (${dados.disciplina})`,
-    corpo: [
-      `Ola, ${nome}.`,
-      '',
-      'Voce tem um atendimento de monitoria HOJE:',
-      '',
-      ...blocoDoAtendimento(dados, fuso),
-      '',
-      'Se nao puder comparecer, cancele sua inscricao para liberar a vaga.',
-      ...acesse('Ver atendimento', link),
-    ].join('\n'),
-  }),
+  /**
+   * Dois textos para o mesmo fato, conforme quem le.
+   *
+   * O monitorado precisa saber onde comparecer e como desistir; o monitor
+   * precisa saber quantas pessoas esperar e que mexer no horario avisa todo
+   * mundo. Dizer "cancele sua inscricao" a quem conduz o atendimento seria
+   * instrucao impossivel — ele nao tem inscricao para cancelar.
+   */
+  [TipoNotificacao.LEMBRETE_DIA]: (contexto) =>
+    contexto.papel === PapelMonitoria.MONITOR
+      ? lembreteDoMonitor(contexto)
+      : lembreteDoMonitorado(contexto),
 
   [TipoNotificacao.ATENDIMENTO_CANCELADO]: ({ nome, dados, fuso, link, motivo }) => ({
     assunto: `Atendimento CANCELADO: ${dados.disciplina}`,

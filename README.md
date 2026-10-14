@@ -222,7 +222,7 @@ sem `Bearer`). O `persistAuthorization` mantém o token entre recarregamentos.
 npm run test
 ```
 
-250 testes de unidade, sem banco, cobrindo o que o PostgreSQL **não** alcança:
+257 testes de unidade, sem banco, cobrindo o que o PostgreSQL **não** alcança:
 autorização, papéis, transições de estado, propriedade de recurso, campos
 derivados e tradução de erro.
 
@@ -463,7 +463,7 @@ transacional tem custo — quem marca como spam derruba a entrega do que importa
 
 | Tipo | Gatilho | Quem recebe | Por quê |
 |---|---|---|---|
-| `LEMBRETE_DIA` | rotina, 30 em 30 min | monitor + inscritos | o atendimento é hoje |
+| `LEMBRETE_DIA` | rotina, 30 em 30 min | monitor + inscritos | o atendimento é hoje — **texto diferente para cada lado**, ver abaixo |
 | `ATENDIMENTO_CANCELADO` | evento | inscritos + monitor | sem isso a pessoa se desloca à toa |
 | `ATENDIMENTO_REAGENDADO` | evento | inscritos + monitor | a inscrição é preservada (B5): a pessoa segue marcada num horário que não escolheu |
 | `MONITOR_HABILITADO` | evento | o aluno promovido | RN01: ele passa a ter deveres por ato do professor |
@@ -474,6 +474,31 @@ transacional tem custo — quem marca como spam derruba a entrega do que importa
 `AVALIACAO_PENDENTE` reaproveita o evento `atendimento.realizado` que a
 gamificação já consumia — **nenhuma emissão nova foi precisa no núcleo** para
 esse tipo.
+
+### O lembrete tem dois textos
+
+`LEMBRETE_DIA` é o mesmo fato para os dois lados do atendimento, mas eles
+precisam de coisas diferentes:
+
+| | Monitorado | Monitor |
+|---|---|---|
+| Assunto | "voce tem atendimento hoje" | "voce conduz um atendimento hoje" |
+| Linha `Monitor(a):` | sim | **não** — é ele |
+| Instrução | cancele sua inscrição para liberar a vaga | cancele ou mude o horário; os inscritos são avisados |
+| Extra | — | **número de inscritos** |
+
+Dizer "cancele sua inscrição" a quem conduz o atendimento seria instrução
+impossível: ele não tem inscrição. E "Monitor(a): Ana Monitora" num e-mail
+endereçado a Ana denuncia uma mensagem escrita para outra pessoa.
+
+O número de inscritos é o dado que muda o que o monitor faz — preparar material
+para um ou para oito, ou cancelar quando ninguém se inscreveu (nesse caso o
+texto diz isso em palavras e sugere cancelar, em vez de exibir `Inscritos: 0`).
+
+Não virou um segundo valor no enum: é o mesmo fato, e a chave de idempotência
+`(tipo, referencia_id, usuario_id)` já separa por pessoa. O papel de quem recebe
+viaja em `ContextoDaMensagem`, e o lembrete do dia é o único tipo que ramifica
+por ele.
 
 ### Todo aviso leva a uma página
 
