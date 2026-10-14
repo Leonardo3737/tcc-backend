@@ -208,15 +208,6 @@ async function main() {
       console.log(cinza('\n  Troque a senha no primeiro acesso em PATCH /api/usuarios/eu/senha.'));
     }
 
-    if (totalAnterior > 0) {
-      console.log(
-        cinza(
-          `\n  Atencao: a base ja tinha ${totalAnterior} professor(es). O caminho normal para ` +
-            'criar\n  professor e POST /api/professores, autenticado — este script e para bootstrap.',
-        ),
-      );
-    }
-
     console.log('');
   } catch (erro) {
     await cliente.query('ROLLBACK').catch(() => {});
