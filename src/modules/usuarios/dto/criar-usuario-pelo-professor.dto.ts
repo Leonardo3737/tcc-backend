@@ -3,14 +3,17 @@ import { Transform } from 'class-transformer';
 import { IsEmail, IsOptional, IsString, Length, Matches, MaxLength } from 'class-validator';
 
 /**
- * Campos comuns a criacao administrativa de qualquer usuario.
+ * Campos comuns a criacao de qualquer usuario.
  *
- * Sao DTOs proprios, e nao os de /auth/registro, por um motivo de seguranca e
- * nao de organizacao: `RegistrarProfessorDto` aceita `codigoCadastro`, que aqui
- * nao faz sentido nenhum. Reusa-lo faria a API aceitar um campo que seria
- * silenciosamente ignorado — o mesmo defeito que corrigimos no `limite` de
- * /gamificacao/meus-pontos. Com DTO proprio, mandar `codigoCadastro` devolve
- * 400 pelo `forbidNonWhitelisted`.
+ * Com o auto-cadastro removido, estes sao os UNICOS DTOs de criacao de usuario
+ * da API: nao existe mais um par em /auth/registro.
+ *
+ * NAO HA CAMPO DE SENHA, e isso e deliberado. Enquanto quem criava a conta
+ * escolhia a senha, ela nascia conhecida por duas pessoas — e a que nao
+ * escolheu nao tinha como saber se a outra a esqueceu. Agora o servidor gera
+ * uma senha aleatoria e a entrega direto no e-mail da pessoa: quem cria a conta
+ * nunca ve a credencial. Mandar `senhaProvisoria` hoje devolve 400 pelo
+ * `forbidNonWhitelisted`, o que e melhor que ser ignorado em silencio.
  */
 abstract class DadosBaseDoUsuario {
   @ApiProperty({ example: 'Maria Souza' })
@@ -24,25 +27,6 @@ abstract class DadosBaseDoUsuario {
   @IsEmail({}, { message: 'email deve ser um endereco de e-mail valido' })
   @MaxLength(150, { message: 'email deve ter no maximo 150 caracteres' })
   email: string;
-
-  /**
-   * Senha inicial, definida por quem cria a conta.
-   *
-   * O nome diz o que ela e: PROVISORIA. Quem cria a conta inevitavelmente conhece
-   * a senha dela, entao o combinado e que a pessoa a troque no primeiro acesso,
-   * em PATCH /api/usuarios/eu/senha. O backend ainda nao FORCA essa troca — ver
-   * a nota sobre `deveTrocarSenha` no README.
-   */
-  @ApiProperty({
-    example: 'provisoria2026',
-    minLength: 8,
-    description:
-      'Senha inicial. Oriente a pessoa a troca-la no primeiro acesso via ' +
-      'PATCH /api/usuarios/eu/senha — quem cria a conta conhece este valor.',
-  })
-  @IsString({ message: 'senhaProvisoria deve ser um texto' })
-  @Length(8, 128, { message: 'senhaProvisoria deve ter entre 8 e 128 caracteres' })
-  senhaProvisoria: string;
 }
 
 export class CriarAlunoPeloProfessorDto extends DadosBaseDoUsuario {

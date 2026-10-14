@@ -5,6 +5,7 @@ import {
   HttpException,
   HttpStatus,
   Logger,
+  Optional,
 } from '@nestjs/common';
 import { Request, Response } from 'express';
 import {
@@ -15,6 +16,7 @@ import {
 } from 'sequelize';
 
 import { RespostaErro } from '../dto/resposta-erro.dto';
+import { LogsService } from '../../modules/logs/logs.service';
 
 /**
  * Traduz violacoes de constraint em mensagens de dominio.
@@ -72,6 +74,16 @@ interface ErroTraduzido {
 export class TodasExcecoesFilter implements ExceptionFilter {
   private readonly logger = new Logger(TodasExcecoesFilter.name);
 
+  /**
+   * Opcional de proposito.
+   *
+   * O filtro e registrado via APP_FILTER e tem de continuar funcionando se o
+   * LogsModule for removido do AppModule — tratamento de erro nao pode depender
+   * de um recurso acessorio. `@Optional()` e o que permite desligar o log sem
+   * quebrar a traducao de excecoes.
+   */
+  constructor(@Optional() private readonly logsService?: LogsService) {}
+
   catch(excecao: unknown, host: ArgumentsHost): void {
     const contexto = host.switchToHttp();
     const resposta = contexto.getResponse<Response>();
@@ -94,6 +106,27 @@ export class TodasExcecoesFilter implements ExceptionFilter {
       caminho: requisicao.url,
       timestamp: new Date().toISOString(),
     };
+
+    /**
+     * TODO erro passa por aqui, inclusive os que o interceptor de log nunca ve.
+     *
+     * Guard que rejeita impede o interceptor de rodar, entao 401 e 403 — as
+     * requisicoes mais relevantes de uma trilha de acesso — so existem neste
+     * ponto. Por isso o filtro registra os erros e o interceptor, apenas os
+     * sucessos: juntos cobrem tudo, sem duplicar.
+     *
+     * A duracao e medida a partir de `requisicao.inicioEmMs`, gravado pelo
+     * middleware; sem ele vai zero, em vez de um numero inventado.
+     */
+    const inicio = (requisicao as Request & { inicioEmMs?: number }).inicioEmMs;
+
+    this.logsService?.agendar({
+      requisicao,
+      statusHttp: traduzido.status,
+      duracaoMs: inicio ? Date.now() - inicio : 0,
+      resposta: corpo,
+      erro: excecao,
+    });
 
     resposta.status(traduzido.status).json(corpo);
   }

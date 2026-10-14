@@ -31,9 +31,18 @@ export class DisciplinasController {
    */
   @Post()
   @Perfis(PerfilUsuario.PROFESSOR)
-  @ApiOperation({ summary: 'Cadastra uma disciplina no catalogo. Somente PROFESSOR.' })
+  @ApiOperation({
+    summary: 'Cadastra uma disciplina no catalogo. Somente PROFESSOR.',
+    description:
+      'Envie apenas o nome: o codigo e gerado pelo servidor a partir dele, no formato ' +
+      'PREFIXO + sequencia ("Calculo I" -> CAL001). Mandar `codigo` devolve 400. ' +
+      'O codigo e imutavel depois de criado.',
+  })
   @ApiCreatedResponse({ type: DisciplinaRespostaDto })
-  @ApiConflictResponse({ description: 'Codigo ja cadastrado.', type: RespostaErro })
+  @ApiConflictResponse({
+    description: 'Nao foi possivel gerar um codigo livre apos as tentativas.',
+    type: RespostaErro,
+  })
   criar(@Body() dto: CriarDisciplinaDto): Promise<DisciplinaRespostaDto> {
     return this.disciplinasService.criar(dto);
   }

@@ -22,7 +22,7 @@ export class ConfiguracaoRespostaDto {
    * duplicado e hardcoded nos dois lados.
    */
   @ApiProperty({
-    example: 'America/Sao_Paulo',
+    example: 'America/Porto_Velho',
     description:
       'Fuso em que as disponibilidades sao interpretadas. Use-o para converter os ' +
       'horarios exibidos ao usuario antes de montar inicio/fim do agendamento.',

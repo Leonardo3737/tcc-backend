@@ -5,6 +5,7 @@ import {
   ApiCreatedResponse,
   ApiOkResponse,
   ApiOperation,
+  ApiServiceUnavailableResponse,
   ApiTags,
 } from '@nestjs/swagger';
 
@@ -28,29 +29,37 @@ export class ProfessoresController {
   constructor(private readonly usuariosService: UsuariosService) {}
 
   /**
-   * Criacao administrativa de professor — POR outro professor.
+   * UNICO caminho de criacao de professor pela API — por outro professor.
+   *
+   * O auto-cadastro de professor foi removido, e com ele o
+   * CODIGO_CADASTRO_PROFESSOR: um segredo compartilhado, que circulava por fora
+   * e nao identificava ninguem, deu lugar a uma exigencia mais forte — estar
+   * autenticado como professor.
    *
    * Consequencia de nao existir ADMIN: o conjunto de professores se expande por
    * decisao de quem ja esta dentro, sem nivel acima para autorizar. Nao ha
    * hierarquia contendo isso; o que existe e a trilha — `criadoPorUsuarioId`
-   * registra quem criou cada conta.
-   *
-   * Nao exige CODIGO_CADASTRO_PROFESSOR: aquele codigo protege o auto-cadastro
-   * PUBLICO, onde ele e a unica barreira. Aqui a barreira e estar autenticado
-   * como professor, que e mais forte.
+   * registra quem criou cada conta. O PRIMEIRO professor, que nao tem autor
+   * possivel, nasce fora da API (`npm run criar-professor`).
    */
   @Post()
   @Perfis(PerfilUsuario.PROFESSOR)
   @ApiOperation({
     summary: 'Cadastra outro professor. Somente PROFESSOR.',
     description:
-      'Nao exige CODIGO_CADASTRO_PROFESSOR — a autorizacao e ja ser professor. ' +
-      'A senha informada e PROVISORIA: oriente a pessoa a troca-la em ' +
-      'PATCH /api/usuarios/eu/senha. A autoria fica registrada em criadoPorUsuarioId.',
+      'Unico caminho de criacao de professor pela API — nao existe auto-cadastro. ' +
+      'NAO envie senha: o servidor gera uma aleatoria e a envia ao e-mail informado; ' +
+      'se o envio falhar, a conta nao e criada (503). A autoria fica registrada em ' +
+      'criadoPorUsuarioId. O primeiro professor de uma base nova e criado por ' +
+      'npm run criar-professor.',
   })
   @ApiCreatedResponse({ type: UsuarioRespostaDto })
   @ApiConflictResponse({
     description: 'E-mail ou identificacao funcional ja cadastrados.',
+    type: RespostaErro,
+  })
+  @ApiServiceUnavailableResponse({
+    description: 'Falha ao enviar a senha por e-mail. A conta nao foi criada.',
     type: RespostaErro,
   })
   criar(

@@ -34,6 +34,8 @@ describe('B1 — busca de alunos para o fluxo da RN01', () => {
         participanteModel as never,
         // ConfigService: sem dominios configurados, a validacao e no-op.
         { get: () => [] } as never,
+        // EmailService: estes testes nao criam usuario, entao nada e entregue.
+        {} as never,
       ),
       findAndCountAll,
       participanteModel,
@@ -224,7 +226,11 @@ describe('B5 — reagendamento', () => {
     };
 
     const atendimentoModel = { findByPk: jest.fn().mockResolvedValue(alvo) };
-    const historicoModel = { create: jest.fn() };
+    /**
+     * Devolve a linha criada: `registrarHistorico` passou a retornar o id dela,
+     * que e a chave de idempotencia dos avisos de transicao.
+     */
+    const historicoModel = { create: jest.fn().mockResolvedValue({ id: 'h-1' }) };
 
     const sequelize = {
       transaction: jest.fn(async (cb: (t: unknown) => unknown) => cb({ LOCK: { UPDATE: 'u' } })),
@@ -335,5 +341,109 @@ describe('B5 — reagendamento', () => {
         aluno,
       ),
     ).rejects.toThrow(/passado/);
+  });
+});
+
+/**
+ * Cancelar um atendimento tambem cancela as inscricoes, para liberar a agenda
+ * dos alunos. Isso apaga o unico registro de quem ia comparecer — e e
+ * justamente essa lista que o aviso de cancelamento precisa.
+ *
+ * A ORDEM e o que esta sob teste: colher depois do update devolve lista vazia,
+ * e o aviso mais importante do sistema nao chega a ninguem.
+ */
+describe('Cancelamento colhe os inscritos antes de cancela-los', () => {
+  function montarCancelamento() {
+    const alvo = {
+      id: 'a-1',
+      monitoriaId: 'm-1',
+      status: StatusAtendimento.AGENDADO,
+      monitorParticipanteId: 'mp-1',
+      inicio: new Date(Date.now() + 3600_000),
+      fim: new Date(Date.now() + 7200_000),
+      update: jest.fn(),
+    };
+
+    const ordem: string[] = [];
+
+    const atendimentoModel = {
+      findByPk: jest.fn().mockResolvedValue(alvo),
+    };
+
+    const inscricaoModel = {
+      update: jest.fn(() => {
+        ordem.push('cancelou-inscricoes');
+        return Promise.resolve([1]);
+      }),
+    };
+
+    const sequelize = {
+      transaction: jest.fn(async (cb: (t: unknown) => unknown) => cb({ LOCK: { UPDATE: 'u' } })),
+      query: jest.fn(() => {
+        ordem.push('colheu-inscritos');
+        return Promise.resolve([{ usuarioId: 'u-bruno' }, { usuarioId: 'u-carla' }]);
+      }),
+    };
+
+    const eventos = { emit: jest.fn() };
+
+    const service = new AtendimentosService(
+      atendimentoModel as never,
+      inscricaoModel as never,
+      { create: jest.fn().mockResolvedValue({ id: 'h-9' }) } as never,
+      {} as never,
+      sequelize as never,
+      {
+        obterContexto: jest.fn().mockResolvedValue({
+          ehProfessorResponsavel: true,
+          participacao: null,
+          papel: null,
+        }),
+      } as never,
+      {} as never,
+      {} as never,
+      { validarJanela: jest.fn() } as never,
+      eventos as never,
+      { get: jest.fn() } as never,
+    );
+
+    // `carregarResposta` roda depois do cancelamento e nao interessa aqui.
+    jest.spyOn(service, 'detalhar').mockResolvedValue({} as never);
+    (service as never as { carregarResposta: jest.Mock }).carregarResposta = jest
+      .fn()
+      .mockResolvedValue({});
+
+    return { service, eventos, ordem };
+  }
+
+  it('consulta os inscritos ANTES de cancelar as inscricoes', async () => {
+    const { service, ordem } = montarCancelamento();
+
+    await service.cancelar('a-1', 'Monitor doente', {
+      id: 'u-prof',
+      nome: 'Prof',
+      email: 'p@ufx.edu.br',
+      perfis: [],
+    } as never);
+
+    expect(ordem).toEqual(['colheu-inscritos', 'cancelou-inscricoes']);
+  });
+
+  it('o evento leva os inscritos colhidos', async () => {
+    const { service, eventos } = montarCancelamento();
+
+    await service.cancelar('a-1', 'Monitor doente', {
+      id: 'u-prof',
+      nome: 'Prof',
+      email: 'p@ufx.edu.br',
+      perfis: [],
+    } as never);
+
+    const [, evento] = eventos.emit.mock.calls.find(
+      (chamada: unknown[]) => chamada[0] === 'atendimento.cancelado',
+    )!;
+
+    expect(evento.inscritosUsuarioIds).toEqual(['u-bruno', 'u-carla']);
+    expect(evento.historicoId).toBe('h-9');
   });
 });

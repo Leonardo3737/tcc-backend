@@ -1,54 +1,29 @@
 import { Body, Controller, HttpCode, HttpStatus, Post } from '@nestjs/common';
 import { Throttle } from '@nestjs/throttler';
-import {
-  ApiConflictResponse,
-  ApiCreatedResponse,
-  ApiForbiddenResponse,
-  ApiOkResponse,
-  ApiOperation,
-  ApiTags,
-  ApiUnauthorizedResponse,
-} from '@nestjs/swagger';
+import { ApiOkResponse, ApiOperation, ApiTags, ApiUnauthorizedResponse } from '@nestjs/swagger';
 
 import { Publico } from '../../common/decorators/publico.decorator';
 import { RespostaErro } from '../../common/dto/resposta-erro.dto';
-import { UsuarioRespostaDto } from '../usuarios/dto/usuario-resposta.dto';
 import { AuthService } from './auth.service';
 import { LoginDto } from './dto/login.dto';
-import { RegistrarAlunoDto } from './dto/registrar-aluno.dto';
-import { RegistrarProfessorDto } from './dto/registrar-professor.dto';
 import { RespostaLoginDto } from './dto/resposta-login.dto';
 
+/**
+ * NAO existe auto-cadastro.
+ *
+ * Criar conta — de aluno ou de professor — e operacao de professor autenticado,
+ * em POST /api/alunos e POST /api/professores. Este controller tem uma unica
+ * rota publica, o login: nenhuma identidade nasce por aqui.
+ *
+ * A consequencia e o bootstrap: uma base nova nao tem professor nenhum e a API
+ * nao oferece caminho para o primeiro. Ele e criado fora da API, por
+ * `npm run criar-professor` (ver scripts/criar-professor.mjs), que exige acesso
+ * ao banco — o que e justamente a barreira desejada.
+ */
 @ApiTags('Autenticacao')
 @Controller('auth')
 export class AuthController {
   constructor(private readonly authService: AuthService) {}
-
-  @Throttle({ padrao: { ttl: 60_000, limit: 10 } })
-  @Publico()
-  @Post('registro/aluno')
-  @ApiOperation({ summary: 'Cadastra um novo usuario com perfil ALUNO.' })
-  @ApiCreatedResponse({ type: UsuarioRespostaDto })
-  @ApiConflictResponse({ description: 'E-mail ou matricula ja cadastrados.', type: RespostaErro })
-  registrarAluno(@Body() dto: RegistrarAlunoDto): Promise<UsuarioRespostaDto> {
-    return this.authService.registrarAluno(dto);
-  }
-
-  @Throttle({ padrao: { ttl: 60_000, limit: 10 } })
-  @Publico()
-  @Post('registro/professor')
-  @ApiOperation({
-    summary: 'Cadastra um novo usuario com perfil PROFESSOR.',
-    description:
-      'Exige o campo codigoCadastro quando a variavel CODIGO_CADASTRO_PROFESSOR esta ' +
-      'configurada no servidor.',
-  })
-  @ApiCreatedResponse({ type: UsuarioRespostaDto })
-  @ApiForbiddenResponse({ description: 'Codigo de cadastro invalido.', type: RespostaErro })
-  @ApiConflictResponse({ description: 'E-mail ja cadastrado.', type: RespostaErro })
-  registrarProfessor(@Body() dto: RegistrarProfessorDto): Promise<UsuarioRespostaDto> {
-    return this.authService.registrarProfessor(dto);
-  }
 
   /**
    * Teto agressivo: 5 tentativas por minuto por IP.

@@ -62,12 +62,15 @@ function montar(sobrescreve: Record<string, unknown> = {}) {
     ...((sobrescreve.participacaoService as object) ?? {}),
   };
 
+  const eventos = { emit: jest.fn() };
+
   const service = new ParticipantesService(
     participanteModel as never,
     alunoModel as never,
     atendimentoModel as never,
     inscricaoModel as never,
     participacaoService as never,
+    eventos as never,
   );
 
   return {
@@ -77,6 +80,7 @@ function montar(sobrescreve: Record<string, unknown> = {}) {
     atendimentoModel,
     inscricaoModel,
     participacaoService,
+    eventos,
   };
 }
 

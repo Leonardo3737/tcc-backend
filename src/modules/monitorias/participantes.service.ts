@@ -5,6 +5,7 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
+import { EventEmitter2 } from '@nestjs/event-emitter';
 import { InjectModel } from '@nestjs/sequelize';
 
 import { RespostaPaginada } from '../../common/dto/resposta-paginada.dto';
@@ -23,6 +24,7 @@ import { ParticipanteRespostaDto } from './dto/participante-resposta.dto';
 import { Monitoria } from './entities/monitoria.model';
 import { MonitoriaParticipante } from './entities/monitoria-participante.model';
 import { ParticipacaoService } from './participacao.service';
+import { EVENTO_MONITOR_HABILITADO, MonitorHabilitadoEvento } from '../notificacoes/eventos';
 
 @Injectable()
 export class ParticipantesService {
@@ -34,6 +36,7 @@ export class ParticipantesService {
     @InjectModel(AtendimentoParticipante)
     private readonly inscricaoModel: typeof AtendimentoParticipante,
     private readonly participacaoService: ParticipacaoService,
+    private readonly eventos: EventEmitter2,
   ) {}
 
   /**
@@ -51,7 +54,27 @@ export class ParticipantesService {
     alunoId: string,
     professor: UsuarioAutenticado,
   ): Promise<ParticipanteRespostaDto> {
-    return this.criarVinculo(monitoria, alunoId, PapelMonitoria.MONITOR, professor.id);
+    const vinculo = await this.criarVinculo(
+      monitoria,
+      alunoId,
+      PapelMonitoria.MONITOR,
+      professor.id,
+    );
+
+    /**
+     * RN01 pela otica de quem foi habilitado: o papel nasce de um ato do
+     * professor, e sem aviso o aluno so descobre que virou monitor se abrir a
+     * plataforma por conta propria. Quem escuta nao e conhecido aqui.
+     *
+     * `alunoId` e o id do USUARIO: `alunos.usuario_id` e PK e FK ao mesmo tempo,
+     * entao os dois valores coincidem (ver AD-03).
+     */
+    this.eventos.emit(
+      EVENTO_MONITOR_HABILITADO,
+      new MonitorHabilitadoEvento(vinculo.id, monitoria.id, alunoId),
+    );
+
+    return vinculo;
   }
 
   /**

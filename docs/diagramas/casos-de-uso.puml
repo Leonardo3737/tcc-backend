@@ -1,7 +1,7 @@
 ' =====================================================================
 '  Diagramas de casos de uso — Plataforma de Apoio a Monitoria
 '
-'  Derivados da autorizacao real das 58 rotas dos controllers em
+'  Derivados da autorizacao real das 56 rotas dos controllers em
 '  src/modules/**/*.controller.ts (decorators @Publico, @Perfis e
 '  @ExigeParticipacao).
 '
@@ -22,7 +22,11 @@
 '  Convencoes adotadas
 '
 '   - casos de uso representam OBJETIVOS do ator, nao operacoes da API;
-'     as 58 rotas foram agrupadas em 32 casos de uso;
+'     as 56 rotas foram agrupadas em 32 casos de uso;
+'
+'   - o Visitante NAO se cadastra: nao ha auto-cadastro. Criar conta e
+'     objetivo do Professor (AD-13). O primeiro professor e criado fora do
+'     sistema, por script administrativo, e por isso nao e caso de uso;
 '
 '   - MONITOR e MONITORADO sao atores porque, em UML, ator e um PAPEL —
 '     nao uma pessoa nem um tipo de usuario. Isso e coerente com o
@@ -58,8 +62,6 @@ Professor --|> Usuario
 
 rectangle "Plataforma de Apoio a Monitoria" {
   usecase "Autenticar-se" as UC01
-  usecase "Cadastrar-se\ncomo aluno" as UC02
-  usecase "Cadastrar-se\ncomo professor" as UC03
 
   usecase "Manter a\npropria conta" as UC04
   usecase "Explorar monitorias\nofertadas" as UC05
@@ -67,14 +69,13 @@ rectangle "Plataforma de Apoio a Monitoria" {
   usecase "Consultar\nagenda pessoal" as UC07
 
   usecase "Manter catalogo\nde disciplinas" as UC08
-  usecase "Cadastrar usuarios\nda plataforma" as UC09
+  usecase "Cadastrar aluno" as UC09a
+  usecase "Cadastrar professor" as UC09b
   usecase "Criar monitoria" as UC10
   usecase "Consultar indicadores\nda plataforma" as UC11
 }
 
 Visitante -- UC01
-Visitante -- UC02
-Visitante -- UC03
 
 Usuario -- UC04
 Usuario -- UC05
@@ -82,16 +83,23 @@ Usuario -- UC06
 Usuario -- UC07
 
 Professor -- UC08
-Professor -- UC09
+Professor -- UC09a
+Professor -- UC09b
 Professor -- UC10
 Professor -- UC11
 
 legend bottom
-  **Cadastrar-se como professor** exige codigo de cadastro quando configurado.
-  Em producao o codigo e obrigatorio: sem ele a aplicacao nao sobe.
+  **Nao existe auto-cadastro.** O Visitante so se autentica: nenhuma identidade
+  nasce de requisicao anonima. Criar conta exige um Professor autenticado, e a
+  autoria de cada conta fica registrada.
 
-  **Cadastrar usuarios da plataforma** — nao ha perfil ADMIN: sao os professores
-  que administram os usuarios. A autoria de cada conta criada fica registrada.
+  **Por que o Professor cadastra usuarios** — nao ha perfil ADMIN no dominio.
+  Sem nivel acima para autorizar, a contencao disponivel e a trilha de autoria,
+  nao a hierarquia.
+
+  **Bootstrap.** O primeiro professor nao pode ter sido criado por outro. Ele e
+  inserido por script administrativo, com acesso ao banco, FORA da fronteira do
+  sistema — por isso nao aparece como caso de uso.
 endlegend
 
 @enduml

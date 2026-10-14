@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { APP_GUARD } from '@nestjs/core';
 import { JwtModule } from '@nestjs/jwt';
+import { SequelizeModule } from '@nestjs/sequelize';
 import type * as jwt from 'jsonwebtoken';
 import { PassportModule } from '@nestjs/passport';
 
@@ -10,11 +11,25 @@ import { PerfilGuard } from '../../common/guards/perfil.guard';
 import { UsuariosModule } from '../usuarios/usuarios.module';
 import { AuthController } from './auth.controller';
 import { AuthService } from './auth.service';
+import { RecuperacaoSenha } from './entities/recuperacao-senha.model';
+import { Usuario } from '../usuarios/entities/usuario.model';
+import { RecuperacaoSenhaController } from './recuperacao-senha.controller';
+import { RecuperacaoSenhaService } from './recuperacao-senha.service';
 import { JwtStrategy } from './strategies/jwt.strategy';
 
 @Module({
   imports: [
     UsuariosModule,
+
+    /**
+     * `Usuario` entra aqui como MODEL, nao como modulo: a recuperacao de senha
+     * precisa escrever `senhaHash` e consumir o codigo na mesma transacao, e
+     * atravessar fronteira de service carregando um `transaction` espalharia
+     * detalhe de persistencia. Mesmo padrao ja usado em UsuariosModule com
+     * MonitoriaParticipante — nao cria ciclo de DI.
+     */
+    SequelizeModule.forFeature([RecuperacaoSenha, Usuario]),
+
     PassportModule.register({ defaultStrategy: 'jwt' }),
     JwtModule.registerAsync({
       imports: [ConfigModule],
@@ -30,9 +45,10 @@ import { JwtStrategy } from './strategies/jwt.strategy';
       }),
     }),
   ],
-  controllers: [AuthController],
+  controllers: [AuthController, RecuperacaoSenhaController],
   providers: [
     AuthService,
+    RecuperacaoSenhaService,
     JwtStrategy,
 
     /**

@@ -15,6 +15,7 @@ import {
   ApiCreatedResponse,
   ApiOkResponse,
   ApiOperation,
+  ApiServiceUnavailableResponse,
   ApiTags,
 } from '@nestjs/swagger';
 
@@ -38,24 +39,33 @@ export class AlunosController {
   constructor(private readonly usuariosService: UsuariosService) {}
 
   /**
-   * Criacao administrativa de aluno.
+   * UNICO caminho de criacao de aluno.
    *
+   * Nao ha auto-cadastro: a antiga POST /api/auth/registro/aluno foi removida.
    * Enquanto nao existe perfil ADMIN, sao os professores que administram os
-   * usuarios da plataforma. Convive com o auto-cadastro publico
-   * (POST /api/auth/registro/aluno): este caminho serve para o professor
-   * cadastrar quem ainda nao se cadastrou sozinho, e deixa registrado em
-   * `criadoPorUsuarioId` quem o fez.
+   * usuarios da plataforma, e `criadoPorUsuarioId` registra quem criou cada
+   * conta — a trilha e o que substitui a hierarquia ausente.
+   *
+   * O professor NAO escolhe a senha e nao chega a ve-la: ela e gerada pelo
+   * servidor e enviada ao e-mail informado. Se o envio falhar, a criacao e
+   * desfeita e a resposta e 503 — uma conta cuja senha nao chegou a ninguem
+   * seria inutilizavel.
    */
   @Post()
   @Perfis(PerfilUsuario.PROFESSOR)
   @ApiOperation({
     summary: 'Cadastra um aluno. Somente PROFESSOR.',
     description:
-      'A senha informada e PROVISORIA e fica conhecida por quem cria a conta. ' +
-      'Oriente a pessoa a troca-la no primeiro acesso em PATCH /api/usuarios/eu/senha.',
+      'Unico caminho de criacao de aluno — nao existe auto-cadastro. NAO envie senha: ' +
+      'o servidor gera uma aleatoria e a envia ao e-mail do aluno. Se o e-mail nao ' +
+      'puder ser entregue, a conta nao e criada (503).',
   })
   @ApiCreatedResponse({ type: UsuarioRespostaDto })
   @ApiConflictResponse({ description: 'E-mail ou matricula ja cadastrados.', type: RespostaErro })
+  @ApiServiceUnavailableResponse({
+    description: 'Falha ao enviar a senha por e-mail. A conta nao foi criada.',
+    type: RespostaErro,
+  })
   criar(
     @Body() dto: CriarAlunoPeloProfessorDto,
     @UsuarioAtual() professor: UsuarioAutenticado,

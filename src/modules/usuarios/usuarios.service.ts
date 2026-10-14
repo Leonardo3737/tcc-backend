@@ -1,13 +1,18 @@
 import {
   BadRequestException,
   Injectable,
+  Logger,
   NotFoundException,
+  ServiceUnavailableException,
   UnauthorizedException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectConnection, InjectModel } from '@nestjs/sequelize';
+import { randomBytes } from 'node:crypto';
 import { Op } from 'sequelize';
 import { Sequelize } from 'sequelize-typescript';
+
+import { EmailService } from '../email/email.service';
 
 import { PaginacaoDto } from '../../common/dto/paginacao.dto';
 import { RespostaPaginada } from '../../common/dto/resposta-paginada.dto';
@@ -24,16 +29,35 @@ import { HashService } from './hash.service';
 import { Professor } from './entities/professor.model';
 import { Usuario } from './entities/usuario.model';
 
+/**
+ * Entrega da senha gerada, executada DENTRO da transacao de criacao.
+ *
+ * O lugar nao e detalhe: rodando aqui, lancar desfaz a criacao inteira. E o
+ * que evita o pior resultado possivel desta funcionalidade — uma conta que
+ * existe, cuja senha ninguem conhece, e que nem o professor consegue consertar.
+ *
+ * Rodar depois do insert tambem importa: se o e-mail ja estiver cadastrado, a
+ * constraint falha antes daqui e nenhuma mensagem e enviada. Sem isso, tentar
+ * recriar um usuario existente mandaria uma senha para a caixa dele.
+ */
+type EntregaDeCredenciais = () => Promise<void>;
+
 interface DadosBaseUsuario {
   nome: string;
   email: string;
   senhaHash: string;
-  /** NULL = auto-cadastro. Preenchido quando um professor cria a conta. */
+  /**
+   * Quem criou a conta. NULL so em conta de bootstrap, criada fora da API por
+   * `npm run criar-professor` — nao ha auto-cadastro, logo toda conta nascida
+   * pela API tem autor.
+   */
   criadoPorUsuarioId?: string | null;
 }
 
 @Injectable()
 export class UsuariosService {
+  private readonly logger = new Logger(UsuariosService.name);
+
   constructor(
     @InjectModel(Usuario) private readonly usuarioModel: typeof Usuario,
     @InjectModel(Aluno) private readonly alunoModel: typeof Aluno,
@@ -48,6 +72,7 @@ export class UsuariosService {
     @InjectModel(MonitoriaParticipante)
     private readonly participanteModel: typeof MonitoriaParticipante,
     private readonly config: ConfigService,
+    private readonly emailService: EmailService,
   ) {}
 
   /**
@@ -59,6 +84,7 @@ export class UsuariosService {
    */
   async criarAluno(
     dados: DadosBaseUsuario & { matricula: string; curso?: string | null },
+    entregarCredenciais?: EntregaDeCredenciais,
   ): Promise<UsuarioRespostaDto> {
     return this.sequelize.transaction(async (transaction) => {
       const usuario = await this.usuarioModel.create(
@@ -80,6 +106,8 @@ export class UsuariosService {
         { transaction },
       );
 
+      await entregarCredenciais?.();
+
       return UsuarioRespostaDto.deModelo(usuario, aluno, null);
     });
   }
@@ -90,6 +118,7 @@ export class UsuariosService {
       identificacaoFuncional?: string | null;
       departamento?: string | null;
     },
+    entregarCredenciais?: EntregaDeCredenciais,
   ): Promise<UsuarioRespostaDto> {
     return this.sequelize.transaction(async (transaction) => {
       const usuario = await this.usuarioModel.create(
@@ -111,6 +140,8 @@ export class UsuariosService {
         { transaction },
       );
 
+      await entregarCredenciais?.();
+
       return UsuarioRespostaDto.deModelo(usuario, null, professor);
     });
   }
@@ -118,9 +149,10 @@ export class UsuariosService {
   /**
    * Criacao administrativa de ALUNO por um professor.
    *
-   * Mesmas regras do auto-cadastro (dominio institucional, unicidade de e-mail e
-   * matricula pelas constraints), com duas diferencas: a senha e provisoria e
-   * definida por quem cria, e a autoria fica registrada em `criadoPorUsuarioId`.
+   * Unico caminho pelo qual um aluno passa a existir: nao ha auto-cadastro. O
+   * dominio institucional e a unicidade de e-mail e matricula continuam valendo;
+   * a senha e provisoria, definida por quem cria, e a autoria fica registrada em
+   * `criadoPorUsuarioId`.
    *
    * A autorizacao — ser PROFESSOR — e do controller. Aqui ficam as regras.
    */
@@ -130,29 +162,34 @@ export class UsuariosService {
   ): Promise<UsuarioRespostaDto> {
     this.validarDominioDoEmail(dto.email);
 
-    return this.criarAluno({
-      nome: dto.nome,
-      email: dto.email,
-      senhaHash: await this.hashService.gerar(dto.senhaProvisoria),
-      matricula: dto.matricula,
-      curso: dto.curso ?? null,
-      criadoPorUsuarioId: professorId,
-    });
+    const senha = gerarSenhaAleatoria();
+
+    return this.criarAluno(
+      {
+        nome: dto.nome,
+        email: dto.email,
+        senhaHash: await this.hashService.gerar(senha),
+        matricula: dto.matricula,
+        curso: dto.curso ?? null,
+        criadoPorUsuarioId: professorId,
+      },
+      () => this.entregarSenhaGerada(dto.nome, dto.email, senha),
+    );
   }
 
   /**
    * Criacao administrativa de PROFESSOR por outro professor.
    *
-   * NAO exige CODIGO_CADASTRO_PROFESSOR, e isso e deliberado: aquele codigo
-   * existe para proteger o auto-cadastro publico, onde nao ha nada alem dele
-   * separando um desconhecido do perfil PROFESSOR. Aqui a barreira e outra e mais
-   * forte — quem chama ja esta autenticado e ja e professor. Exigir os dois seria
-   * pedir ao professor um segredo de infraestrutura que ele nao tem por que
-   * conhecer.
+   * Unico caminho pelo qual um professor passa a existir pela API — o
+   * auto-cadastro publico foi removido, e com ele o CODIGO_CADASTRO_PROFESSOR,
+   * que era a sua unica barreira. A barreira agora e mais forte e nao depende de
+   * um segredo compartilhado: quem chama ja esta autenticado e ja e professor.
    *
    * O efeito colateral, que precisa estar as claras: como nao ha ADMIN, qualquer
    * professor pode criar professores, e esses tambem poderao. A contencao
-   * disponivel e a trilha de auditoria, nao a hierarquia.
+   * disponivel e a trilha de auditoria, nao a hierarquia. O conjunto inicial de
+   * professores, porem, deixou de ser aberto: o primeiro so nasce com acesso ao
+   * banco (scripts/criar-professor.mjs).
    */
   async criarProfessorComoProfessor(
     dto: CriarProfessorPeloProfessorDto,
@@ -160,25 +197,90 @@ export class UsuariosService {
   ): Promise<UsuarioRespostaDto> {
     this.validarDominioDoEmail(dto.email);
 
-    return this.criarProfessor({
-      nome: dto.nome,
-      email: dto.email,
-      senhaHash: await this.hashService.gerar(dto.senhaProvisoria),
-      identificacaoFuncional: dto.identificacaoFuncional ?? null,
-      departamento: dto.departamento ?? null,
-      criadoPorUsuarioId: professorId,
-    });
+    const senha = gerarSenhaAleatoria();
+
+    return this.criarProfessor(
+      {
+        nome: dto.nome,
+        email: dto.email,
+        senhaHash: await this.hashService.gerar(senha),
+        identificacaoFuncional: dto.identificacaoFuncional ?? null,
+        departamento: dto.departamento ?? null,
+        criadoPorUsuarioId: professorId,
+      },
+      () => this.entregarSenhaGerada(dto.nome, dto.email, senha),
+    );
   }
 
   /**
-   * D-09: restringe o cadastro a dominios institucionais, se configurado.
+   * Manda a senha gerada para o e-mail da PESSOA, nunca para quem criou a conta.
    *
-   * Mora aqui, e nao no AuthService, porque a regra e sobre o e-mail do USUARIO
-   * e vale em todos os caminhos de criacao — auto-cadastro e criacao pelo
-   * professor. Mantida em um lugar so para que fechar um caminho nao deixe o
-   * outro aberto.
+   * Lanca se o e-mail estiver configurado e o envio falhar — e assim a criacao
+   * inteira e desfeita (ver EntregaDeCredenciais). Isto contraria a politica
+   * geral de que e-mail nao derruba operacao de dominio, e a contradicao e
+   * aparente: aquela politica vale para NOTIFICACOES, avisos sobre algo que ja
+   * aconteceu. Aqui o e-mail e o proprio meio de entrega da credencial. Uma
+   * conta criada sem a senha chegar nao e uma conta com um aviso faltando: e
+   * uma conta inutilizavel, que ninguem consegue acessar nem recuperar.
+   *
+   * Sem e-mail configurado (so possivel fora de producao — ver o guard de boot
+   * em EmailService), a criacao segue e a senha vai para o log, sob a mesma
+   * dupla condicao usada em RecuperacaoSenhaService. Sem isso, criar usuario em
+   * desenvolvimento produziria contas que ninguem consegue usar.
    */
-  validarDominioDoEmail(email: string): void {
+  private async entregarSenhaGerada(nome: string, email: string, senha: string): Promise<void> {
+    if (!this.emailService.estaConfigurado()) {
+      this.avisarEmDesenvolvimento(email, senha);
+      return;
+    }
+
+    const enviou = await this.emailService.enviar({
+      para: [{ email, nome }],
+      assunto: 'Sua conta na plataforma de monitoria',
+      texto: [
+        `Ola, ${nome}.`,
+        '',
+        'Uma conta foi criada para voce na plataforma de monitoria.',
+        '',
+        `Acesse com este e-mail e a senha provisoria: ${senha}`,
+        '',
+        'Troque a senha no primeiro acesso. Se preferir, use a opcao de',
+        'recuperacao de senha para definir uma propria.',
+      ].join('\n'),
+    });
+
+    if (!enviou) {
+      throw new ServiceUnavailableException(
+        'Nao foi possivel enviar a senha para o e-mail informado. A conta NAO foi criada; ' +
+          'confira o endereco e tente novamente.',
+      );
+    }
+  }
+
+  /** Mesma guarda dupla de RecuperacaoSenhaService.avisarEmDesenvolvimento. */
+  private avisarEmDesenvolvimento(email: string, senha: string): void {
+    if (this.config.get<string>('app.ambiente') === 'production') {
+      return;
+    }
+
+    this.logger.warn(
+      `[DESENVOLVIMENTO] Senha gerada para ${email}: ${senha} — exibida porque o ` +
+        'e-mail nao esta configurado. Em producao a aplicacao nao sobe sem e-mail.',
+    );
+  }
+
+  /**
+   * D-09: restringe a criacao de contas a dominios institucionais, se configurado.
+   *
+   * Voltou a ser privada quando o auto-cadastro foi removido: antes era publica
+   * para que o AuthService a aplicasse tambem no registro publico. Hoje os dois
+   * unicos caminhos de criacao estao neste service, e os dois passam por aqui —
+   * o que impede que fechar um deixe o outro aberto.
+   *
+   * O script de bootstrap (scripts/criar-professor.mjs) repete a regra, porque
+   * nao sobe o Nest.
+   */
+  private validarDominioDoEmail(email: string): void {
     const permitidos = this.config.get<string[]>('cadastro.dominiosPermitidos') ?? [];
 
     if (permitidos.length === 0) {
@@ -363,4 +465,18 @@ export class UsuariosService {
 
     return UsuarioRespostaDto.deModelo(professor.usuario!, null, professor);
   }
+}
+
+/**
+ * Senha provisoria aleatoria.
+ *
+ * `randomBytes` do modulo crypto, pelo mesmo motivo do codigo de recuperacao:
+ * `Math.random` e previsivel a partir de saidas anteriores, e quem criasse
+ * varias contas em sequencia conseguiria prever as senhas das seguintes.
+ *
+ * base64url rende 12 caracteres sem `+`, `/` ou `=` — que quebram ao ser
+ * copiados de um e-mail ou colados em um terminal.
+ */
+function gerarSenhaAleatoria(): string {
+  return randomBytes(9).toString('base64url');
 }

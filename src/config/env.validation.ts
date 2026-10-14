@@ -13,6 +13,12 @@ export const envValidationSchema = Joi.object({
   API_PREFIX: Joi.string().default('api'),
   CORS_ORIGINS: Joi.string().allow('').default(''),
 
+  /**
+   * Base dos links enviados por e-mail. Validada como URI para que um valor
+   * malformado quebre no boot, e nao na caixa de entrada de alguem.
+   */
+  URL_FRONT: Joi.string().uri().default('http://localhost:3001'),
+
   DB_HOST: Joi.string().required(),
   DB_PORT: Joi.number().port().default(5432),
   DB_NAME: Joi.string().required(),
@@ -33,11 +39,28 @@ export const envValidationSchema = Joi.object({
   JWT_EXPIRES_IN: Joi.string().default('8h'),
 
   EMAIL_DOMINIOS_PERMITIDOS: Joi.string().allow('').default(''),
-  CODIGO_CADASTRO_PROFESSOR: Joi.string().allow('').default(''),
+
+  /**
+   * E-mail transacional (Brevo). Todas opcionais: vazio = servico em modo log.
+   *
+   * EMAIL_REMETENTE_EMAIL passa por validacao de formato mesmo sendo opcional —
+   * um remetente malformado so se revelaria no primeiro envio, que e tarde.
+   */
+  BREVO_API_KEY: Joi.string().allow('').default(''),
+  EMAIL_REMETENTE_NOME: Joi.string().default('Plataforma de Monitoria'),
+  EMAIL_REMETENTE_EMAIL: Joi.string().email().allow('').default(''),
+
+  /**
+   * Avisos por e-mail. Padrao FALSE: ver a justificativa em configuration.ts.
+   */
+  NOTIFICACOES_HABILITADAS: Joi.boolean().default(false),
+
+  /** Trilha de requisicoes. Padrao TRUE: ver a justificativa em configuration.ts. */
+  LOGS_REQUISICAO_HABILITADOS: Joi.boolean().default(true),
 
   // Fuso usado para casar um atendimento (TIMESTAMPTZ) com a disponibilidade
   // semanal do monitor, que e declarada em horario local.
-  TIMEZONE_INSTITUICAO: Joi.string().default('America/Sao_Paulo'),
+  TIMEZONE_INSTITUICAO: Joi.string().default('America/Porto_Velho'),
 
   /**
    * D-15 — limites de agendamento, agora configuraveis por instituicao.

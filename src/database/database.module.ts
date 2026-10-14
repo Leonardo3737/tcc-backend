@@ -8,6 +8,9 @@ import { AtendimentoStatusHistorico } from '../modules/atendimentos/entities/ate
 import { Avaliacao } from '../modules/avaliacoes/entities/avaliacao.model';
 import { Disciplina } from '../modules/disciplinas/entities/disciplina.model';
 import { PontuacaoEvento } from '../modules/gamificacao/entities/pontuacao-evento.model';
+import { RecuperacaoSenha } from '../modules/auth/entities/recuperacao-senha.model';
+import { Notificacao } from '../modules/notificacoes/entities/notificacao.model';
+import { LogRequisicao } from '../modules/logs/entities/log-requisicao.model';
 import { Material } from '../modules/materiais/entities/material.model';
 import { Disponibilidade } from '../modules/disponibilidades/entities/disponibilidade.model';
 import { Monitoria } from '../modules/monitorias/entities/monitoria.model';
@@ -44,6 +47,9 @@ import { Usuario } from '../modules/usuarios/entities/usuario.model';
           Avaliacao,
           Material,
           PontuacaoEvento,
+          RecuperacaoSenha,
+          Notificacao,
+          LogRequisicao,
         ],
 
         /**

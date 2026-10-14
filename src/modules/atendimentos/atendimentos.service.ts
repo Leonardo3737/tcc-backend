@@ -20,6 +20,14 @@ import { StatusParticipacao } from '../../common/enums/status-participacao.enum'
 import { UsuarioAutenticado } from '../../common/types/usuario-autenticado';
 import { DisponibilidadesService } from '../disponibilidades/disponibilidades.service';
 import { AtendimentoRealizadoEvento, EVENTO_ATENDIMENTO_REALIZADO } from '../gamificacao/eventos';
+import {
+  AtendimentoAgendadoEvento,
+  AtendimentoCanceladoEvento,
+  AtendimentoReagendadoEvento,
+  EVENTO_ATENDIMENTO_AGENDADO,
+  EVENTO_ATENDIMENTO_CANCELADO,
+  EVENTO_ATENDIMENTO_REAGENDADO,
+} from '../notificacoes/eventos';
 import { Disciplina } from '../disciplinas/entities/disciplina.model';
 import { Monitoria } from '../monitorias/entities/monitoria.model';
 import { MonitoriaParticipante } from '../monitorias/entities/monitoria-participante.model';
@@ -190,6 +198,15 @@ export class AtendimentosService {
 
       return atendimento.id;
     });
+
+    /**
+     * Emitido DEPOIS do commit: um ouvinte que consultasse o atendimento dentro
+     * da transacao nao o encontraria. Quem escuta nao e conhecido aqui.
+     */
+    this.eventos.emit(
+      EVENTO_ATENDIMENTO_AGENDADO,
+      new AtendimentoAgendadoEvento(atendimentoId, monitoria.id, origem, usuario.id),
+    );
 
     return this.carregarResposta(atendimentoId);
   }
@@ -517,13 +534,24 @@ export class AtendimentosService {
     const atendimento = await this.buscarOuFalhar(atendimentoId);
     await this.exigirMonitorOuProfessor(atendimento, usuario);
 
-    await this.sequelize.transaction(async (transaction) => {
+    let inscritosUsuarioIds: string[] = [];
+
+    const historicoId = await this.sequelize.transaction(async (transaction) => {
       const travado = await this.atendimentoModel.findByPk(atendimentoId, {
         transaction,
         lock: transaction.LOCK.UPDATE,
       });
 
       this.exigirStatus(travado!, StatusAtendimento.AGENDADO);
+
+      /**
+       * Colhido ANTES do update abaixo, e a ordem e o ponto inteiro.
+       *
+       * O proximo comando cancela as inscricoes, e com isso apaga o unico
+       * registro de quem estava inscrito. Quem for avisar precisa desta lista,
+       * e depois daqui ela nao existe mais em lugar nenhum.
+       */
+      inscritosUsuarioIds = await this.alunosInscritos(atendimentoId, transaction);
 
       await travado!.update(
         { status: StatusAtendimento.CANCELADO, motivoCancelamento: motivo },
@@ -537,7 +565,7 @@ export class AtendimentosService {
         { where: { atendimentoId, status: StatusInscricao.INSCRITO }, transaction },
       );
 
-      await this.registrarHistorico(
+      return this.registrarHistorico(
         atendimentoId,
         StatusAtendimento.AGENDADO,
         StatusAtendimento.CANCELADO,
@@ -546,6 +574,17 @@ export class AtendimentosService {
         transaction,
       );
     });
+
+    this.eventos.emit(
+      EVENTO_ATENDIMENTO_CANCELADO,
+      new AtendimentoCanceladoEvento(
+        atendimentoId,
+        historicoId,
+        motivo,
+        usuario.id,
+        inscritosUsuarioIds,
+      ),
+    );
 
     return this.carregarResposta(atendimentoId);
   }
@@ -594,7 +633,7 @@ export class AtendimentosService {
       );
     }
 
-    await this.sequelize.transaction(async (transaction) => {
+    const historicoId = await this.sequelize.transaction(async (transaction) => {
       const travado = await this.atendimentoModel.findByPk(atendimentoId, {
         transaction,
         lock: transaction.LOCK.UPDATE,
@@ -606,7 +645,7 @@ export class AtendimentosService {
 
       await travado!.update({ inicio, fim }, { transaction });
 
-      await this.registrarHistorico(
+      return this.registrarHistorico(
         atendimentoId,
         StatusAtendimento.AGENDADO,
         StatusAtendimento.AGENDADO,
@@ -616,7 +655,38 @@ export class AtendimentosService {
       );
     });
 
+    this.eventos.emit(
+      EVENTO_ATENDIMENTO_REAGENDADO,
+      new AtendimentoReagendadoEvento(atendimentoId, historicoId, usuario.id),
+    );
+
     return this.carregarResposta(atendimentoId, false, usuario);
+  }
+
+  /**
+   * Ids de usuario de quem esta INSCRITO no atendimento, neste instante.
+   *
+   * Roda dentro da transacao de quem chama porque o valor so e correto antes de
+   * o cancelamento mexer nas inscricoes.
+   */
+  private async alunosInscritos(
+    atendimentoId: string,
+    transaction: Transaction,
+  ): Promise<string[]> {
+    const linhas = (await this.sequelize.query(
+      `SELECT mp.aluno_id AS "usuarioId"
+         FROM atendimento_participantes ap
+         JOIN monitoria_participantes mp ON mp.id = ap.participante_id
+        WHERE ap.atendimento_id = :atendimentoId
+          AND ap.status = 'INSCRITO'`,
+      {
+        replacements: { atendimentoId },
+        type: QueryTypes.SELECT,
+        transaction,
+      },
+    )) as { usuarioId: string }[];
+
+    return linhas.map((linha) => linha.usuarioId);
   }
 
   /** Nomes dos inscritos cuja agenda colide com a janela proposta. */
@@ -964,7 +1034,14 @@ export class AtendimentosService {
     }
   }
 
-  /** Toda transicao de status vira uma linha imutavel. E o historico da RN10. */
+  /**
+   * Toda transicao de status vira uma linha imutavel. E o historico da RN10.
+   *
+   * Devolve o ID da linha criada: as notificacoes de transicao o usam como chave
+   * de idempotencia. Precisa ser o id do HISTORICO, e nao o do atendimento —
+   * reagendar duas vezes gera duas linhas, e so assim o segundo aviso nao e
+   * descartado como duplicata do primeiro.
+   */
   private async registrarHistorico(
     atendimentoId: string,
     statusAnterior: StatusAtendimento | null,
@@ -972,8 +1049,8 @@ export class AtendimentosService {
     motivo: string | null,
     usuarioId: string,
     transaction: Transaction,
-  ): Promise<void> {
-    await this.historicoModel.create(
+  ): Promise<string> {
+    const linha = await this.historicoModel.create(
       {
         atendimentoId,
         statusAnterior,
@@ -984,5 +1061,7 @@ export class AtendimentosService {
       },
       { transaction },
     );
+
+    return linha.id;
   }
 }

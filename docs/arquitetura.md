@@ -145,6 +145,29 @@ produção:* refresh token rotativo com tabela de sessões e revogação.
 `perfil` e `usuarioId` no payload; a **participação em monitoria nunca vai no token** —
 é consultada por requisição, porque muda e é o eixo de autorização sensível.
 
+**Não há auto-cadastro** (AD-13). Nenhuma identidade nasce de uma requisição
+anônima: criar conta, de aluno ou de professor, exige um professor autenticado
+(`POST /api/alunos`, `POST /api/professores`).
+
+A superfície pública da API são quatro rotas: `GET /api/configuracao`,
+`POST /api/auth/login` e as duas de recuperação de senha (AD-14). Nenhuma delas
+cria conta — as de recuperação operam sobre conta existente, e só por meio de um
+código entregue no e-mail dela.
+
+Isso reposiciona a RN01. Enquanto o auto-cadastro existia, qualquer pessoa com
+acesso à rede podia tornar-se PROFESSOR e, daí, habilitar monitores; a barreira
+era um código compartilhado no ambiente (`CODIGO_CADASTRO_PROFESSOR`), que
+circulava por fora do sistema, não identificava ninguém e não deixava rastro.
+A barreira atual é nominal: quem cria uma conta está autenticado, e sua autoria
+fica em `usuarios.criado_por_usuario_id`.
+
+A contrapartida é o **bootstrap**: o primeiro professor não pode ter sido criado
+por outro, e a API deliberadamente não oferece caminho para ele. Ele é criado
+fora da aplicação, por um script que exige credenciais do PostgreSQL
+(`npm run criar-professor`). Trocou-se uma rota pública permanente por uma
+operação administrativa pontual — e `criado_por_usuario_id` nulo passa a
+identificar exatamente as contas de bootstrap.
+
 ---
 
 ## 3. Modelo conceitual
@@ -213,7 +236,7 @@ Sem coluna `tipo`: o perfil é derivado da existência de `alunos`/`professores`
 | Coluna | Tipo | Notas |
 |---|---|---|
 | `id` | uuid PK | |
-| `codigo` | varchar(20) UNIQUE NOT NULL | ex.: MAT101 |
+| `codigo` | citext UNIQUE NOT NULL | **gerado** a partir do nome: prefixo + sequência (CAL001). Imutável. Ver AD-16 |
 | `nome` | varchar(150) NOT NULL | |
 | `ativa` | boolean NOT NULL default true | |
 
@@ -578,7 +601,10 @@ requisito de **infraestrutura**, não só de guard:
 | `DatabaseModule` | `SequelizeModule.forRootAsync`, registro de models | — |
 | *(sem módulo)* `src/common/` | filters, guards, pipes, decorators — 🔵 previsto como `CommonModule`, mas são artefatos importados diretamente; um módulo Nest não acrescentaria nada | — |
 | ~~`StorageModule`~~ | 🔵 **projetado, não implementado.** Depende do upload de materiais, que ficou fora de escopo (ver §12 e C5 no README) | — |
-| `AuthModule` | login, hash, JWT, `JwtAuthGuard`, `PerfilGuard` | guards |
+| `AuthModule` | login, recuperacao de senha por codigo, JWT, `JwtAuthGuard`, `PerfilGuard` | guards |
+| `EmailModule` | e-mail transacional via Brevo. Sem credencial, opera em modo log | `EmailService` |
+| `NotificacoesModule` | avisos por e-mail (modulo folha). Escuta eventos do nucleo e roda o lembrete do dia | `NotificacoesService` |
+| `LogsModule` | trilha de requisicoes: interceptor (sucesso), filtro (erros) e redacao de campos sensiveis | `LogsService` |
 | `UsuariosModule` | `Usuario`, `Aluno`, `Professor` (ciclo de vida 1:1) | `UsuariosService` |
 | `DisciplinasModule` | catálogo | `DisciplinasService` |
 | `MonitoriasModule` | `Monitoria` + `MonitoriaParticipante` | `ParticipacaoService`, `ParticipacaoGuard` |
@@ -736,13 +762,15 @@ backend/
 │       │   └── atendimentos.{module,controller,service}.ts
 │       ├── avaliacoes/
 │       ├── materiais/
+│       ├── email/                       # e-mail transacional (Brevo)
 │       ├── gamificacao/
 │       ├── analytics/
 │       └── configuracao/
 ├── test/
 │   └── unit/                            # suítes Jest sem banco
 ├── scripts/
-│   └── fluxo-completo.mjs               # verificação ponta a ponta, com banco real
+│   ├── fluxo-completo.mjs               # verificação ponta a ponta, com banco real
+│   └── criar-professor.mjs              # bootstrap: primeiro professor, fora da API (AD-13)
 ├── docs/
 │   └── arquitetura.md
 ├── uploads/                             # UPLOAD_DIR — volume persistente, no .gitignore
@@ -772,6 +800,12 @@ centralizadas e ordenadas** em `database/migrations/`.
 | AD-10 | Atendimento | sessão + inscrições; individual é `vagas = 1` | D-03; um único caminho de código para os dois casos |
 | AD-11 | Sincronia de horário | FK composta com `ON UPDATE CASCADE` | viabiliza RN03 do aluno sem trigger |
 | AD-12 | Binários | disco local atrás de `StorageService`; download por endpoint autenticado | D-05, D-19 + RN07 |
+| AD-13 | Criação de identidade | sem auto-cadastro; criar conta exige professor autenticado, com autoria registrada. Primeiro professor por script fora da API | RN01 deixa de depender de segredo compartilhado; autoria substitui a hierarquia ausente |
+| AD-14 | Recuperacao de senha | codigo de 6 digitos por e-mail, com hash argon2id, teto de 5 tentativas, 15 min de validade e um unico codigo ativo por usuario (indice parcial) | link em URL vaza em historico, Referer e log de proxy; o codigo e digitado, nao navegado |
+| AD-15 | Credencial inicial | senha gerada pelo servidor e entregue por e-mail, dentro da transacao de criacao; falha de entrega desfaz a criacao | quem cria a conta nao precisa — nem deve — conhecer a senha alheia; conta sem credencial entregue e inutilizavel |
+| AD-16 | Codigo da disciplina | gerado pelo servidor como prefixo derivado do nome + sequencia (CAL001); imutavel; unicidade garantida pela constraint UNIQUE com nova tentativa no service | campo livre produzia convencoes divergentes e 409 so apos o formulario preenchido; identificador opaco inutilizaria metade da busca por `?busca=` |
+| AD-17 | Notificacoes | tabela com UNIQUE (tipo, referencia_id, usuario_id) e corpo gravado; reserva ANTES do envio; transicoes referenciam a linha de historico; o cancelamento leva os inscritos no proprio evento | reservar depois permitiria envio duplicado entre instancias; referenciar o atendimento descartaria o aviso do segundo reagendamento |
+| AD-18 | Trilha de requisicoes | uma linha por requisicao, com redacao por nome de campo; sucesso pelo interceptor, erros pelo filtro global | guard que rejeita impede o interceptor de rodar, entao 401/403 so existem no filtro; gravar corpo cru exporia senha, codigo e token em texto claro |
 
 ---
 
@@ -782,7 +816,9 @@ centralizadas e ordenadas** em `database/migrations/`.
 | `PERIODO_LETIVO` como entidade | quando houver validação de datas globais ou calendário acadêmico (D-01) |
 | Exceções de disponibilidade (feriados, semana de provas) | quando o volume de cancelamentos manuais incomodar |
 | Geração automática de sessões a partir da recorrência | depois que o agendamento manual estiver estável |
-| Notificações (e-mail/push) de confirmação e lembrete | após o fluxo de agendamento estar estável |
+| Notificações push / in-app | o e-mail já existe (`NotificacoesModule`); push exigiria service worker e registro de dispositivo |
+| Preferência de opt-out por usuário | antes de uso institucional real: hoje não há como alguém recusar os avisos |
+| Invalidar tokens emitidos antes de uma troca de senha | junto com refresh token rotativo: coluna `token_version` em `usuarios`, conferida na `JwtStrategy` (ver README, *Recuperação de senha*) |
 | Lista de espera quando `vagas` esgota | se houver demanda real observada |
 | Antivírus / scan de upload | produção com usuários reais |
 | Migração para object storage (S3/MinIO) | se a aplicação precisar rodar em mais de uma instância |
