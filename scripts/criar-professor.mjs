@@ -159,22 +159,13 @@ async function main() {
   }
 
   try {
-    const { rows: existentes } = await cliente.query('SELECT id FROM usuarios WHERE email = $1', [
-      email,
-    ]);
+    const { rows: existentes } = await cliente.query('SELECT id FROM usuarios');
 
     if (existentes.length > 0) {
       abortar(
-        `Ja existe usuario com o e-mail ${email}. ` +
-          'Para promover um usuario existente a professor, use o banco diretamente — ' +
-          'a API ainda nao oferece essa operacao (ver README).',
+        `Usuario ja cadastrado`
       );
     }
-
-    const { rows: professores } = await cliente.query(
-      'SELECT count(*)::int AS total FROM professores',
-    );
-    const totalAnterior = professores[0].total;
 
     const id = randomUUID();
     const senhaHash = await argon2.hash(senha, OPCOES_HASH);
