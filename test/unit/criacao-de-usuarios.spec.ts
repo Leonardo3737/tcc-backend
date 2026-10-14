@@ -68,6 +68,7 @@ function montar(opcoes: OpcoesDeMontagem | string[] = {}) {
 
   const config = {
     get: jest.fn((chave: string) => (chave === 'app.ambiente' ? ambiente : dominiosPermitidos)),
+    getOrThrow: jest.fn().mockReturnValue('http://localhost:3001'),
   };
 
   const emailService = {
@@ -94,6 +95,7 @@ function montar(opcoes: OpcoesDeMontagem | string[] = {}) {
     sequelize,
     hashService,
     emailService,
+    config,
     criados,
     textoPorHash,
   };
@@ -442,5 +444,39 @@ describe('Entrega da senha falha: a conta nao nasce', () => {
     await service.criarAlunoComoProfessor(dto, professor.id);
 
     expect(registrado.join('\n')).not.toContain(hashService.gerar.mock.calls[0][0] as string);
+  });
+});
+
+describe('O e-mail de conta criada leva ao sistema', () => {
+  const dto = { nome: 'Bruno Aluno', email: 'bruno@ufx.edu.br', matricula: '2021001234' };
+
+  it('inclui o link de acesso', async () => {
+    const { service, emailService } = montar();
+
+    await service.criarAlunoComoProfessor(dto, professor.id);
+
+    expect(emailService.enviar.mock.calls[0][0].texto).toContain('http://localhost:3001');
+  });
+
+  it('o link vem da configuracao, nao esta fixo no texto', async () => {
+    const { service, emailService, config } = montar();
+    config.getOrThrow.mockReturnValue('https://monitoria.ufx.edu.br');
+
+    await service.criarProfessorComoProfessor(
+      { nome: 'Maria Souza', email: 'maria@ufx.edu.br' },
+      professor.id,
+    );
+
+    expect(emailService.enviar.mock.calls[0][0].texto).toContain('https://monitoria.ufx.edu.br');
+  });
+
+  /** A senha continua no corpo; o link nao pode ter deslocado nada. */
+  it('continua levando a senha provisoria junto', async () => {
+    const { service, emailService, hashService } = montar();
+
+    await service.criarAlunoComoProfessor(dto, professor.id);
+
+    const senha = hashService.gerar.mock.calls[0][0] as string;
+    expect(emailService.enviar.mock.calls[0][0].texto).toContain(senha);
   });
 });

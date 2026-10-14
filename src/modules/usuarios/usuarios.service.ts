@@ -234,6 +234,16 @@ export class UsuariosService {
       return;
     }
 
+    /**
+     * Aponta para a RAIZ do sistema, e nao para uma rota de login.
+     *
+     * Uma aplicacao autenticada redireciona quem nao tem sessao para o proprio
+     * login, entao a raiz sempre funciona; `/login` seria um palpite sobre uma
+     * rota do frontend, e link quebrado em e-mail nao tem conserto depois de
+     * enviado. Se houver rota dedicada, acrescentar o caminho aqui e uma linha.
+     */
+    const url = this.config.getOrThrow<string>('app.urlFront');
+
     const enviou = await this.emailService.enviar({
       para: [{ email, nome }],
       assunto: 'Sua conta na plataforma de monitoria',
@@ -246,6 +256,8 @@ export class UsuariosService {
         '',
         'Troque a senha no primeiro acesso. Se preferir, use a opcao de',
         'recuperacao de senha para definir uma propria.',
+        '',
+        `Acessar o sistema: ${url}`,
       ].join('\n'),
     });
 
