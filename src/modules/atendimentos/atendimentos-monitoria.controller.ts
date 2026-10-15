@@ -1,5 +1,7 @@
 import {
   Body,
+  HttpCode,
+  HttpStatus,
   Controller,
   Get,
   Param,
@@ -9,9 +11,11 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import {
+  ApiBadRequestResponse,
   ApiBearerAuth,
   ApiConflictResponse,
   ApiCreatedResponse,
+  ApiOkResponse,
   ApiOperation,
   ApiTags,
 } from '@nestjs/swagger';
@@ -29,7 +33,11 @@ import { ContextoParticipacao } from '../monitorias/participacao.service';
 import { AtendimentosService } from './atendimentos.service';
 import { AgendarAtendimentoDto } from './dto/agendar-atendimento.dto';
 import { AtendimentoRespostaDto } from './dto/atendimento-resposta.dto';
+import { AgendarAtendimentosEmLoteDto } from './dto/agendar-em-lote.dto';
 import { FiltroAtendimentosDto } from './dto/filtro-atendimentos.dto';
+import { LoteDeAtendimentosRespostaDto } from './dto/lote-resposta.dto';
+import { FiltroHorariosLivresDto } from './dto/filtro-horarios-livres.dto';
+import { HorariosLivresRespostaDto } from './dto/horario-livre.dto';
 
 /**
  * Rotas de atendimento no contexto de uma monitoria.
@@ -71,6 +79,65 @@ export class AtendimentosMonitoriaController {
     @UsuarioAtual() usuario: UsuarioAutenticado,
   ): Promise<AtendimentoRespostaDto> {
     return this.atendimentosService.agendar(contexto, dto, usuario);
+  }
+
+  /**
+   * A2 — serie de sessoes recorrentes em uma requisicao.
+   *
+   * Mesma autorizacao do POST avulso: criar quinze sessoes de uma vez nao e
+   * poder diferente de criar quinze sessoes uma a uma.
+   */
+  @Post('lote')
+  @HttpCode(HttpStatus.OK)
+  @ExigeParticipacao({
+    papeis: [PapelMonitoria.MONITOR, PapelMonitoria.MONITORADO],
+    professorResponsavel: 'NEGADO',
+  })
+  @ApiOperation({
+    summary: 'Agenda uma serie de atendimentos recorrentes (ate 30 ocorrencias).',
+    description:
+      'SUCESSO PARCIAL: cada ocorrencia roda na propria transacao, entao um feriado ou ' +
+      'choque pontual recusa apenas aquela data e cria as demais. Por isso devolve 200 ' +
+      'com o resultado de cada uma, e nao 201. Os monitorados recebem UM aviso referente ' +
+      'a primeira sessao, mencionando as demais — um por ocorrencia inundaria a caixa.',
+  })
+  @ApiOkResponse({ type: LoteDeAtendimentosRespostaDto })
+  agendarEmLote(
+    @Body() dto: AgendarAtendimentosEmLoteDto,
+    @ContextoMonitoria() contexto: ContextoParticipacao,
+    @UsuarioAtual() usuario: UsuarioAutenticado,
+  ): Promise<LoteDeAtendimentosRespostaDto> {
+    return this.atendimentosService.agendarEmLote(contexto, dto, usuario);
+  }
+
+  /**
+   * A1 — horarios concretos, para substituir data/inicio/fim digitados.
+   *
+   * Autorizacao igual a de GET /disponibilidades, que ja e aberta a qualquer
+   * autenticado (decisao B4): quem vai se inscrever precisa ver a agenda ANTES
+   * de ter vinculo, senao a descoberta exige entrar primeiro.
+   */
+  @Get('horarios-livres')
+  @ApiOperation({
+    summary: 'Slots livres dos monitores, prontos para agendar.',
+    description:
+      'SUGESTAO, NAO RESERVA: o calculo e uma fotografia do instante da consulta, e dois ' +
+      'usuarios podem receber o mesmo slot. A verificacao autoritativa continua no POST. ' +
+      'Ja descontados: atendimentos do monitor, a agenda do proprio solicitante (inclusive ' +
+      'em outras monitorias) e a antecedencia minima. Janela maxima de 60 dias; teto de ' +
+      '500 slots, sinalizado em `truncado`.',
+  })
+  @ApiOkResponse({ type: HorariosLivresRespostaDto })
+  @ApiBadRequestResponse({
+    description: 'Janela maior que 60 dias, invertida, ou duracao fora dos limites.',
+    type: RespostaErro,
+  })
+  horariosLivres(
+    @Param('monitoriaId', ParseUUIDPipe) monitoriaId: string,
+    @Query() filtro: FiltroHorariosLivresDto,
+    @UsuarioAtual() usuario: UsuarioAutenticado,
+  ): Promise<HorariosLivresRespostaDto> {
+    return this.atendimentosService.horariosLivres(monitoriaId, filtro, usuario);
   }
 
   @Get()

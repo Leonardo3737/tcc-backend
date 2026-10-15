@@ -36,6 +36,7 @@ export class ConfiguracaoController {
       agendamento: {
         duracaoMinimaMinutos: this.config.getOrThrow<number>('agenda.duracaoMinimaMinutos'),
         duracaoMaximaMinutos: this.config.getOrThrow<number>('agenda.duracaoMaximaMinutos'),
+        duracaoPadraoMinutos: this.config.getOrThrow<number>('agenda.duracaoPadraoMinutos'),
         antecedenciaMinimaMinutos: this.config.getOrThrow<number>(
           'agenda.antecedenciaMinimaMinutos',
         ),

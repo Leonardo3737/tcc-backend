@@ -25,7 +25,7 @@ import { LogsService } from '../../modules/logs/logs.service';
  * `ex_monitor_sem_conflito` em "o monitor ja tem atendimento nesse horario"
  * (RN03) em vez de devolver um erro cru do PostgreSQL ao frontend.
  */
-const MENSAGENS_POR_CONSTRAINT: Record<string, string> = {
+export const MENSAGENS_POR_CONSTRAINT: Record<string, string> = {
   usuarios_email_key: 'Ja existe um usuario cadastrado com este e-mail.',
   alunos_matricula_key: 'Ja existe um aluno cadastrado com esta matricula.',
   professores_identificacao_funcional_key:
@@ -54,6 +54,26 @@ const MENSAGENS_POR_CONSTRAINT: Record<string, string> = {
 
   uq_inscricao_unica: 'Este aluno ja possui inscricao neste atendimento.',
 };
+
+/**
+ * Mensagem de dominio de uma violacao de constraint, se houver.
+ *
+ * Exportada para o agendamento em lote (A2), que precisa transformar a recusa
+ * de UMA ocorrencia em dado da resposta em vez de derrubar a serie inteira.
+ * Sem isto, o lote duplicaria este mapa e as duas copias divergiriam na
+ * primeira constraint nova.
+ */
+export function mensagemDeConstraint(excecao: unknown): string | null {
+  if (!(excecao instanceof BaseError)) {
+    return null;
+  }
+
+  const constraint =
+    (excecao as { parent?: { constraint?: string } }).parent?.constraint ??
+    (excecao as { index?: string }).index;
+
+  return (constraint && MENSAGENS_POR_CONSTRAINT[constraint]) ?? null;
+}
 
 interface ErroTraduzido {
   status: number;

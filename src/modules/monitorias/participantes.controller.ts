@@ -131,6 +131,32 @@ export class ParticipantesController {
    * o participante sai da monitoria, mas continua existindo como sujeito dos
    * atendimentos ja registrados.
    */
+  @Post('participantes/:participanteId/promover-a-monitor')
+  @HttpCode(HttpStatus.OK)
+  @ExigeParticipacao({ professorResponsavel: 'EXIGIDO' })
+  @ApiOperation({
+    summary: 'Promove um MONITORADO a MONITOR. Somente o professor responsavel (RN01).',
+    description:
+      'Em uma unica transacao: encerra o vinculo de MONITORADO (preservando o historico, ' +
+      'RN10) e cria o de MONITOR. As inscricoes ativas do aluno em atendimentos desta ' +
+      'monitoria sao CANCELADAS, e ele e avisado disso no mesmo e-mail da promocao. ' +
+      'Substitui a sequencia encerrar + POST /monitores, que nao era atomica: falhando o ' +
+      'segundo passo, o aluno ficava sem vinculo nenhum.',
+  })
+  @ApiOkResponse({ type: ParticipanteRespostaDto })
+  @ApiForbiddenResponse({ description: 'Nao e o professor responsavel.', type: RespostaErro })
+  @ApiConflictResponse({
+    description: 'Ja e MONITOR, vinculo nao esta ATIVO, ou monitoria encerrada.',
+    type: RespostaErro,
+  })
+  promoverAMonitor(
+    @Param('participanteId', ParseUUIDPipe) participanteId: string,
+    @ContextoMonitoria() contexto: ContextoParticipacao,
+    @UsuarioAtual() usuario: UsuarioAutenticado,
+  ): Promise<ParticipanteRespostaDto> {
+    return this.participantesService.promoverAMonitor(contexto.monitoria, participanteId, usuario);
+  }
+
   @Post('participantes/:participanteId/encerrar')
   @HttpCode(HttpStatus.OK)
   @ExigeParticipacao()

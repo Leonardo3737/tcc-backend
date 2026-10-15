@@ -52,6 +52,10 @@ interface PedidoDeDespacho {
   /** Papel de quem recebe. Hoje so o lembrete do dia muda o texto por ele. */
   papel?: PapelMonitoria;
   inscritos?: number;
+  /** Inscricoes canceladas pela promocao a monitor (A3). */
+  inscricoesCanceladas?: number;
+  /** Outras sessoes criadas no mesmo lote (A2). */
+  demaisSessoes?: number;
 }
 
 interface ContextoDeAtendimento extends DadosDoAtendimento {
@@ -114,8 +118,6 @@ export class NotificacoesService implements OnModuleInit {
    */
   @OnEvent(EVENTO_ATENDIMENTO_AGENDADO)
   async aoAgendar(evento: AtendimentoAgendadoEvento): Promise<void> {
-    console.log();
-
     await this.protegido('agendamento', async () => {
       const contexto = await this.contextoDoAtendimento(evento.atendimentoId);
 
@@ -144,6 +146,7 @@ export class NotificacoesService implements OnModuleInit {
         destinatarios: monitorados,
         dados: contexto,
         referenciasDeLink: { atendimentoId: contexto.atendimentoId },
+        demaisSessoes: evento.demaisSessoes,
       });
     });
   }
@@ -230,6 +233,7 @@ export class NotificacoesService implements OnModuleInit {
         destinatarios,
         dados: { ...this.contextoVazio(), disciplina: linha.disciplina },
         referenciasDeLink: { monitoriaId: evento.monitoriaId },
+        inscricoesCanceladas: evento.inscricoesCanceladas,
       });
     });
   }
@@ -401,6 +405,8 @@ export class NotificacoesService implements OnModuleInit {
         motivo: pedido.motivo,
         papel: pedido.papel,
         inscritos: pedido.inscritos,
+        inscricoesCanceladas: pedido.inscricoesCanceladas,
+        demaisSessoes: pedido.demaisSessoes,
       });
 
       let notificacao: Notificacao;

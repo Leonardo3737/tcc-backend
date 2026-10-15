@@ -1198,6 +1198,7 @@ async function main() {
   await verificarRecuperacaoDeSenha(monitorado);
   await verificarNotificacoes({ monitora, monitorado, monitoria });
   await verificarLogs({ professor, monitorado });
+  await verificarAjustesDeApi({ professor, monitora, monitorado, monitoria, vinculoMonitora });
 
   console.log(
     `\n${falhas === 0 ? verde('TODOS OS PASSOS PASSARAM') : vermelho(`${falhas} FALHA(S)`)}` +
@@ -1591,6 +1592,136 @@ async function verificarLogs({ professor, monitorado }) {
     }
   } finally {
     await cliente.end();
+  }
+}
+
+/**
+ * Ajustes de usabilidade (A1-A4, B1-B2).
+ *
+ * Roda no fim, com a monitoria ja encerrada, entao o que se verifica aqui sao
+ * as rotas de LEITURA e as recusas. A criacao em lote e a promocao exigem
+ * monitoria ATIVA e tem cobertura de unidade.
+ */
+async function verificarAjustesDeApi({ professor, monitora, monitorado, monitoria }) {
+  secao('13. Ajustes de usabilidade (A1-A4, B1-B2)');
+
+  const configuracao = await esperarSucesso(
+    'B1: GET /configuracao traz a duracao padrao',
+    api('GET', '/configuracao'),
+  );
+
+  const limites = configuracao.agendamento;
+
+  if (
+    typeof limites.duracaoPadraoMinutos === 'number' &&
+    limites.duracaoPadraoMinutos >= limites.duracaoMinimaMinutos &&
+    limites.duracaoPadraoMinutos <= limites.duracaoMaximaMinutos
+  ) {
+    ok('B1: duracao padrao coerente com minimo e maximo', `${limites.duracaoPadraoMinutos} min`);
+  } else {
+    falhou('B1: duracao padrao fora da faixa', JSON.stringify(limites));
+  }
+
+  const regras = await esperarSucesso(
+    'B2: GET /gamificacao/regras',
+    api('GET', '/gamificacao/regras', { token: monitorado.token }),
+  );
+
+  const avaliacao = regras.regras.find((r) => r.tipo === 'AVALIACAO_RECEBIDA');
+
+  if (avaliacao && avaliacao.pontos === null) {
+    ok('B2: AVALIACAO_RECEBIDA vem com pontos null (valor variavel)');
+  } else {
+    falhou('B2: AVALIACAO_RECEBIDA deveria vir null', JSON.stringify(avaliacao));
+  }
+
+  if (regras.regras.every((r) => r.descricao?.length > 0)) {
+    ok('B2: toda regra tem descricao', `${regras.regras.length} regras`);
+  } else {
+    falhou('B2: ha regra sem descricao');
+  }
+
+  const de = new Date().toISOString();
+  const ate = new Date(Date.now() + 14 * 864e5).toISOString();
+
+  const livres = await esperarSucesso(
+    'A1: GET horarios-livres',
+    api('GET', `/monitorias/${monitoria.id}/atendimentos/horarios-livres?de=${de}&ate=${ate}`, {
+      token: monitorado.token,
+    }),
+  );
+
+  if (Array.isArray(livres.horarios) && typeof livres.truncado === 'boolean') {
+    ok('A1: resposta no formato esperado', `${livres.horarios.length} slot(s)`);
+  } else {
+    falhou('A1: formato inesperado', JSON.stringify(livres).slice(0, 120));
+  }
+
+  await esperarRecusa(
+    'A1: janela maior que 60 dias e recusada (400)',
+    400,
+    api(
+      'GET',
+      `/monitorias/${monitoria.id}/atendimentos/horarios-livres?de=${de}` +
+        `&ate=${new Date(Date.now() + 61 * 864e5).toISOString()}`,
+      { token: monitorado.token },
+    ),
+  );
+
+  await esperarRecusa(
+    'A1: duracao fora dos limites e recusada (400)',
+    400,
+    api(
+      'GET',
+      `/monitorias/${monitoria.id}/atendimentos/horarios-livres?de=${de}&ate=${ate}` +
+        '&duracaoMinutos=5',
+      { token: monitorado.token },
+    ),
+  );
+
+  /** A4 — os filtros de agenda pessoal nao valem na listagem da monitoria. */
+  for (const filtro of ['aguardandoRegistro', 'pendentesDeAvaliacao']) {
+    await esperarRecusa(
+      `A4: ${filtro} em /monitorias/:id/atendimentos e recusado (400)`,
+      400,
+      api('GET', `/monitorias/${monitoria.id}/atendimentos?${filtro}=true`, {
+        token: professor.token,
+      }),
+    );
+  }
+
+  await esperarRecusa(
+    'A4: os dois filtros juntos sao recusados (400)',
+    400,
+    api('GET', '/atendimentos/meus?aguardandoRegistro=true&pendentesDeAvaliacao=true', {
+      token: monitorado.token,
+    }),
+  );
+
+  const aguardando = await esperarSucesso(
+    'A4: aguardandoRegistro em /atendimentos/meus',
+    api('GET', '/atendimentos/meus?aguardandoRegistro=true', { token: monitora.token }),
+  );
+
+  const soAgendados = aguardando.dados.every(
+    (a) => a.status === 'AGENDADO' && new Date(a.inicio) < new Date(),
+  );
+
+  if (soAgendados) {
+    ok('A4: fila traz apenas AGENDADOS ja iniciados', `${aguardando.dados.length} sessao(oes)`);
+  } else {
+    falhou('A4: a fila trouxe sessao fora do recorte');
+  }
+
+  const pendentes = await esperarSucesso(
+    'A4: pendentesDeAvaliacao em /atendimentos/meus',
+    api('GET', '/atendimentos/meus?pendentesDeAvaliacao=true', { token: monitorado.token }),
+  );
+
+  if (pendentes.dados.every((a) => a.status === 'REALIZADO')) {
+    ok('A4: so REALIZADOS aparecem como pendentes de avaliacao', `${pendentes.dados.length}`);
+  } else {
+    falhou('A4: trouxe atendimento nao REALIZADO');
   }
 }
 

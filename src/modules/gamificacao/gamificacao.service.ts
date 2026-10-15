@@ -7,6 +7,7 @@ import { TipoPontuacao } from '../../common/enums/tipo-pontuacao.enum';
 import { UsuarioAutenticado } from '../../common/types/usuario-autenticado';
 import { MonitoriaParticipante } from '../monitorias/entities/monitoria-participante.model';
 import { PosicaoRankingDto, ResumoPontuacaoDto } from './dto/ranking-resposta.dto';
+import { RegrasDePontuacaoRespostaDto } from './dto/regras-resposta.dto';
 import { PontuacaoEvento } from './entities/pontuacao-evento.model';
 import {
   AtendimentoRealizadoEvento,
@@ -29,6 +30,24 @@ const PONTOS: Record<TipoPontuacao, number> = {
   [TipoPontuacao.AVALIACAO_RECEBIDA]: 0,
 };
 
+/**
+ * Texto de cada regra, para a tela de ranking poder explicar a pontuacao.
+ *
+ * Fica ao lado de PONTOS de proposito: mudar um numero sem mudar a explicacao
+ * produziria uma tela que mente, e o par junto torna a divergencia visivel em
+ * uma linha de diff.
+ */
+const DESCRICOES: Record<TipoPontuacao, string> = {
+  [TipoPontuacao.ATENDIMENTO_REALIZADO]:
+    'Concedido ao monitor a cada atendimento marcado como realizado.',
+  [TipoPontuacao.PARTICIPACAO_ATENDIMENTO]:
+    'Concedido ao monitorado com presenca confirmada no atendimento.',
+  [TipoPontuacao.AVALIACAO_RECEBIDA]: 'Vale a propria nota recebida, de 1 a 5.',
+};
+
+/** Tipos cuja pontuacao e variavel: o cliente recebe `null`, nao um numero. */
+const PONTUACAO_VARIAVEL: ReadonlySet<TipoPontuacao> = new Set([TipoPontuacao.AVALIACAO_RECEBIDA]);
+
 @Injectable()
 export class GamificacaoService {
   private readonly logger = new Logger(GamificacaoService.name);
@@ -38,6 +57,20 @@ export class GamificacaoService {
     @InjectModel(MonitoriaParticipante)
     private readonly participanteModel: typeof MonitoriaParticipante,
   ) {}
+
+  /**
+   * Tabela de pontos, para a tela de ranking poder explicar de onde vem cada
+   * ponto. Somente leitura: nao consulta o banco e nao depende de usuario.
+   */
+  regras(): RegrasDePontuacaoRespostaDto {
+    return {
+      regras: Object.values(TipoPontuacao).map((tipo) => ({
+        tipo,
+        pontos: PONTUACAO_VARIAVEL.has(tipo) ? null : PONTOS[tipo],
+        descricao: DESCRICOES[tipo],
+      })),
+    };
+  }
 
   /**
    * Atendimento concluido -> pontuacao.

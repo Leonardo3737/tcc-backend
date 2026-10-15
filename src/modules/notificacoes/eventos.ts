@@ -30,6 +30,15 @@ export class AtendimentoAgendadoEvento {
     readonly origem: OrigemAtendimento,
     /** Nao recebe aviso do proprio ato. */
     readonly autorUsuarioId: string,
+    /**
+     * A2 — quantas OUTRAS sessoes foram criadas no mesmo lote.
+     *
+     * Zero no agendamento avulso. Existe para que uma serie recorrente gere UM
+     * aviso mencionando as demais, em vez de um por ocorrencia: 16 sessoes com
+     * 20 monitorados seriam 320 e-mails de uma vez, o que queima a cota do
+     * provedor e faz quem marcar spam derrubar a entrega do lembrete do dia.
+     */
+    readonly demaisSessoes = 0,
   ) {}
 }
 
@@ -70,5 +79,17 @@ export class MonitorHabilitadoEvento {
     readonly participanteId: string,
     readonly monitoriaId: string,
     readonly alunoUsuarioId: string,
+    /**
+     * Quantas inscricoes de MONITORADO foram canceladas ao promover.
+     *
+     * Zero na habilitacao comum, em que o aluno nao tinha vinculo anterior. Vem
+     * no evento, e nao de consulta, porque o aviso precisa dizer o que MUDOU
+     * para a pessoa — e, depois da transacao, uma inscricao cancelada por
+     * promocao e indistinguivel de uma que ela mesma cancelou dias antes.
+     *
+     * Serve para que a promocao mande UM e-mail coerente em vez de dois
+     * contraditorios ("voce virou monitor" + "seu atendimento foi cancelado").
+     */
+    readonly inscricoesCanceladas = 0,
   ) {}
 }
