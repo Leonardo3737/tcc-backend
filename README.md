@@ -222,7 +222,7 @@ sem `Bearer`). O `persistAuthorization` mantém o token entre recarregamentos.
 npm run test
 ```
 
-257 testes de unidade, sem banco, cobrindo o que o PostgreSQL **não** alcança:
+266 testes de unidade, sem banco, cobrindo o que o PostgreSQL **não** alcança:
 autorização, papéis, transições de estado, propriedade de recurso, campos
 derivados e tradução de erro.
 
@@ -255,7 +255,7 @@ Com o banco semeado (`npm run db:seed`) e o servidor rodando em outro terminal:
 npm run test:fluxo
 ```
 
-**125 verificações**, todas passando contra PostgreSQL 17. O seeder passou a ser
+**135 verificações**, todas passando contra PostgreSQL 17. O seeder passou a ser
 pré-requisito: sem auto-cadastro, o script precisa de um professor que ele não
 pode criar — que é exatamente a restrição verificada nas primeiras linhas.
 [scripts/fluxo-completo.mjs](scripts/fluxo-completo.mjs) percorre o fluxo inteiro
@@ -367,6 +367,50 @@ produção vai para agregadores que muita gente lê.
 O acoplamento com o provedor fica inteiro em
 [`mensagem-email.ts`](src/modules/email/mensagem-email.ts) (formato) e no método
 `despachar` (protocolo). Trocar de provedor não alcança quem chama.
+
+---
+
+## Edição de dados básicos
+
+Três entidades aceitam edição, e o que **não** é editável em cada uma é a parte
+que importa:
+
+| Rota | Edita | Não edita, e por quê |
+|---|---|---|
+| `PATCH /api/disciplinas/:id` | `nome`, `ativa` | `codigo` — gerado e imutável; monitorias e materiais já o referenciam como identidade estável |
+| `PATCH /api/monitorias/:id` | `descricao`, `dataInicio`, `dataFim` | `disciplinaId`, `ano`, `semestre` — identidade da oferta; `status` muda por `/ativar`, `/encerrar`, `/cancelar` |
+| `PATCH /api/atendimentos/:id` | `assunto`, `local`, `vagas` | `inicio`/`fim` — mudam só por `/reagendar`; `status` — por `/realizar` e `/cancelar`; `modalidade` — definida no agendamento |
+
+### Por que o horário fica fora do PATCH
+
+Permitir `inicio`/`fim` aqui seria um atalho que contorna as quatro coisas que o
+reagendamento faz: validar a janela de disponibilidade do monitor, recusar
+conflito na agenda dos inscritos (RN03), registrar a transição no histórico
+(RN10) e avisar quem já estava inscrito. É a mesma razão pela qual `/realizar` e
+`/cancelar` são operações de domínio e não um `PATCH` em `status` — e por isso
+`PATCH` é o **único** verbo de edição genérica no módulo de atendimentos.
+
+Mandar `inicio` no corpo devolve `400` pelo `forbidNonWhitelisted`, em vez de
+ser ignorado em silêncio.
+
+### Duas regras do PATCH de atendimento
+
+**Só `AGENDADO` aceita edição.** Atendimento realizado é fato consumado: mudar o
+assunto depois reescreveria o que aconteceu, e a avaliação de quem participou
+passaria a se referir a outra coisa.
+
+**`modalidade` não é editável.** Quem se inscreveu escolheu comparecer a uma
+sessão presencial ou remota; virar a chave depois mudaria o compromisso assumido
+sem que a inscrição fosse refeita. `local` continua editável, o que cobre o caso
+real — corrigir a sala ou o link sem alterar a natureza do encontro.
+
+**`vagas` não pode ficar abaixo do número de inscritos.** A inscrição é barrada
+por `ocupadas >= vagas`; sem essa verificação, a edição seria a porta dos fundos
+dessa regra, deixando a sessão num estado que nenhuma outra operação produz.
+
+Editar não gera linha de histórico — `atendimento_status_historico` registra
+mudança de **estado**, e assunto, local e vagas não são estado. A
+trilha dessas edições fica em `logs_requisicao`, que guarda corpo e autor.
 
 ---
 

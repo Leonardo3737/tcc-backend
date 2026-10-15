@@ -447,3 +447,155 @@ describe('Cancelamento colhe os inscritos antes de cancela-los', () => {
     expect(evento.historicoId).toBe('h-9');
   });
 });
+
+/**
+ * Edicao de dados basicos do atendimento.
+ *
+ * O risco aqui e ser permissivo demais: um PATCH generico vira atalho para
+ * contornar as validacoes que as operacoes de dominio fazem. Por isso a maior
+ * parte destes testes afirma o que a edicao NAO pode fazer.
+ */
+describe('Edicao de dados basicos do atendimento', () => {
+  function montarEdicao(sobrescreve: Record<string, unknown> = {}) {
+    const alvo = {
+      id: 'a-1',
+      monitoriaId: 'm-1',
+      status: StatusAtendimento.AGENDADO,
+      monitorParticipanteId: 'mp-1',
+      inicio: new Date(Date.now() + 3600_000),
+      fim: new Date(Date.now() + 7200_000),
+      vagas: 5,
+      update: jest.fn(),
+      ...((sobrescreve.alvo as object) ?? {}),
+    };
+
+    const inscricaoModel = { count: jest.fn().mockResolvedValue(sobrescreve.ocupadas ?? 0) };
+
+    const service = new AtendimentosService(
+      { findByPk: jest.fn().mockResolvedValue(alvo) } as never,
+      inscricaoModel as never,
+      { create: jest.fn().mockResolvedValue({ id: 'h-1' }) } as never,
+      {} as never,
+      { transaction: jest.fn() } as never,
+      {
+        obterContexto: jest.fn().mockResolvedValue({
+          ehProfessorResponsavel: true,
+          participacao: null,
+          papel: null,
+        }),
+      } as never,
+      {} as never,
+      {} as never,
+      { validarJanela: jest.fn() } as never,
+      { emit: jest.fn() } as never,
+      { get: jest.fn() } as never,
+    );
+
+    (service as never as { carregarResposta: jest.Mock }).carregarResposta = jest
+      .fn()
+      .mockResolvedValue({});
+
+    return { service, alvo, inscricaoModel };
+  }
+
+  const usuario = { id: 'u-prof', nome: 'Prof', email: 'p@ufx.edu.br', perfis: [] } as never;
+
+  it('altera assunto, local e vagas', async () => {
+    const { service, alvo } = montarEdicao();
+
+    await service.atualizar(
+      'a-1',
+      { assunto: 'Revisao da P2', local: 'Sala 10', vagas: 8 },
+      usuario,
+    );
+
+    expect(alvo.update).toHaveBeenCalledWith({
+      assunto: 'Revisao da P2',
+      local: 'Sala 10',
+      vagas: 8,
+    });
+  });
+
+  /**
+   * `modalidade` sai do DTO: quem se inscreveu escolheu comparecer a uma sessao
+   * presencial ou remota, e virar a chave depois mudaria o compromisso assumido
+   * sem que a inscricao fosse refeita. O `forbidNonWhitelisted` recusa na borda;
+   * aqui garante-se que, mesmo escapando dele, o service nao escreve o campo.
+   */
+  it('ignora modalidade, que nao e editavel', async () => {
+    const { service, alvo } = montarEdicao();
+
+    await service.atualizar(
+      'a-1',
+      { assunto: 'Novo', modalidade: ModalidadeAtendimento.REMOTO } as never,
+      usuario,
+    );
+
+    expect(alvo.update).toHaveBeenCalledWith({ assunto: 'Novo' });
+  });
+
+  /** Campo omitido significa "nao mexer", nao "apagar". */
+  it('nao toca em campo que nao veio', async () => {
+    const { service, alvo } = montarEdicao();
+
+    await service.atualizar('a-1', { assunto: 'So o assunto' }, usuario);
+
+    expect(alvo.update).toHaveBeenCalledWith({ assunto: 'So o assunto' });
+  });
+
+  /** Sem isto nao haveria como remover um local ja informado. */
+  it('string vazia em local limpa o campo', async () => {
+    const { service, alvo } = montarEdicao();
+
+    await service.atualizar('a-1', { local: '' }, usuario);
+
+    expect(alvo.update).toHaveBeenCalledWith({ local: null });
+  });
+
+  /**
+   * A regressao mais importante: reduzir vagas abaixo de quem ja esta dentro
+   * deixaria a sessao num estado que nenhuma outra operacao produz. A inscricao
+   * e barrada por `ocupadas >= vagas`; a edicao nao pode ser a porta dos fundos.
+   */
+  it('recusa vagas abaixo do numero de inscritos', async () => {
+    const { service, alvo } = montarEdicao({ ocupadas: 4 });
+
+    await expect(service.atualizar('a-1', { vagas: 2 }, usuario)).rejects.toThrow(
+      ConflictException,
+    );
+    expect(alvo.update).not.toHaveBeenCalled();
+  });
+
+  it('aceita vagas exatamente iguais ao numero de inscritos', async () => {
+    const { service, alvo } = montarEdicao({ ocupadas: 4 });
+
+    await service.atualizar('a-1', { vagas: 4 }, usuario);
+
+    expect(alvo.update).toHaveBeenCalledWith({ vagas: 4 });
+  });
+
+  it('so conta inscritos quando vagas vem no corpo', async () => {
+    const { service, inscricaoModel } = montarEdicao();
+
+    await service.atualizar('a-1', { assunto: 'Outro assunto' }, usuario);
+
+    expect(inscricaoModel.count).not.toHaveBeenCalled();
+  });
+
+  /**
+   * Atendimento realizado e um fato consumado: mudar o assunto depois
+   * reescreveria o que aconteceu, e a avaliacao de quem participou passaria a
+   * se referir a outra coisa.
+   */
+  it.each([StatusAtendimento.REALIZADO, StatusAtendimento.CANCELADO])(
+    'recusa edicao de atendimento %s',
+    async (status) => {
+      const { service, alvo } = montarEdicao({ alvo: { status } });
+
+      await expect(service.atualizar('a-1', { assunto: 'Novo' }, usuario)).rejects.toThrow(
+        ConflictException,
+      );
+      expect(alvo.update).not.toHaveBeenCalled();
+    },
+  );
+});

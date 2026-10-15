@@ -38,6 +38,7 @@ import { ParticipantesService } from '../monitorias/participantes.service';
 import { Aluno } from '../usuarios/entities/aluno.model';
 import { Usuario } from '../usuarios/entities/usuario.model';
 import { AgendarAtendimentoDto } from './dto/agendar-atendimento.dto';
+import { AtualizarAtendimentoDto } from './dto/atualizar-atendimento.dto';
 import { AtendimentoRespostaDto, HistoricoStatusRespostaDto } from './dto/atendimento-resposta.dto';
 import { CampoOrdenacaoAtendimento, FiltroAtendimentosDto } from './dto/filtro-atendimentos.dto';
 import { ReagendarAtendimentoDto } from './dto/reagendar-atendimento.dto';
@@ -587,6 +588,73 @@ export class AtendimentosService {
     );
 
     return this.carregarResposta(atendimentoId);
+  }
+
+  /**
+   * Edicao dos dados basicos de uma sessao ja agendada.
+   *
+   * Deliberadamente SEM horario: `inicio` e `fim` mudam apenas por `reagendar`,
+   * que valida a disponibilidade do monitor, recusa conflito na agenda dos
+   * inscritos (RN03), registra a transicao (RN10) e avisa quem estava inscrito.
+   * Permitir horario aqui seria oferecer um atalho que contorna as quatro coisas.
+   *
+   * Nao gera linha de historico porque nao ha transicao de status: o
+   * `atendimento_status_historico` registra mudanca de ESTADO, e assunto, local
+   * e vagas nao sao estado. A trilha desta edicao fica em `logs_requisicao`,
+   * que guarda corpo e autor da requisicao.
+   */
+  async atualizar(
+    atendimentoId: string,
+    dto: AtualizarAtendimentoDto,
+    usuario: UsuarioAutenticado,
+  ): Promise<AtendimentoRespostaDto> {
+    const atendimento = await this.buscarOuFalhar(atendimentoId);
+    await this.exigirMonitorOuProfessor(atendimento, usuario);
+
+    /**
+     * So AGENDADO aceita edicao.
+     *
+     * Atendimento realizado e um fato consumado: mudar o assunto depois
+     * reescreveria o que aconteceu, e a avaliacao de quem participou passaria a
+     * se referir a outra coisa. Cancelado, pela mesma razao, fica como ficou.
+     */
+    this.exigirStatus(atendimento, StatusAtendimento.AGENDADO);
+
+    if (dto.vagas !== undefined) {
+      await this.exigirVagasSuficientes(atendimentoId, dto.vagas);
+    }
+
+    await atendimento.update({
+      ...(dto.assunto !== undefined ? { assunto: dto.assunto } : {}),
+      ...(dto.vagas !== undefined ? { vagas: dto.vagas } : {}),
+      // String vazia e o unico jeito de LIMPAR o local: omitir significa
+      // "nao mexer", e o DTO nao aceita null.
+      ...(dto.local !== undefined ? { local: dto.local === '' ? null : dto.local } : {}),
+    });
+
+    return this.carregarResposta(atendimentoId, false, usuario);
+  }
+
+  /**
+   * Reduzir vagas abaixo de quem ja esta dentro deixaria a sessao em estado que
+   * nenhuma outra operacao consegue produzir — mais inscritos que capacidade.
+   * A inscricao e barrada por `ocupadas >= vagas`; sem esta verificacao, a
+   * edicao seria a porta dos fundos dessa regra.
+   */
+  private async exigirVagasSuficientes(atendimentoId: string, vagas: number): Promise<void> {
+    const ocupadas = await this.inscricaoModel.count({
+      where: {
+        atendimentoId,
+        status: { [Op.in]: [StatusInscricao.INSCRITO, StatusInscricao.PRESENTE] },
+      },
+    });
+
+    if (vagas < ocupadas) {
+      throw new ConflictException(
+        `Ja ha ${ocupadas} inscrito(s) neste atendimento: vagas nao pode ser menor que isso. ` +
+          'Cancele inscricoes antes de reduzir a capacidade.',
+      );
+    }
   }
 
   /**

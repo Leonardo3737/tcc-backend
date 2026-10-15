@@ -806,6 +806,7 @@ centralizadas e ordenadas** em `database/migrations/`.
 | AD-16 | Codigo da disciplina | gerado pelo servidor como prefixo derivado do nome + sequencia (CAL001); imutavel; unicidade garantida pela constraint UNIQUE com nova tentativa no service | campo livre produzia convencoes divergentes e 409 so apos o formulario preenchido; identificador opaco inutilizaria metade da busca por `?busca=` |
 | AD-17 | Notificacoes | tabela com UNIQUE (tipo, referencia_id, usuario_id) e corpo gravado; reserva ANTES do envio; transicoes referenciam a linha de historico; o cancelamento leva os inscritos no proprio evento | reservar depois permitiria envio duplicado entre instancias; referenciar o atendimento descartaria o aviso do segundo reagendamento |
 | AD-18 | Trilha de requisicoes | uma linha por requisicao, com redacao por nome de campo; sucesso pelo interceptor, erros pelo filtro global | guard que rejeita impede o interceptor de rodar, entao 401/403 so existem no filtro; gravar corpo cru exporia senha, codigo e token em texto claro |
+| AD-19 | Edicao de dados basicos | PATCH separado das operacoes de dominio: horario so por /reagendar, status so por /realizar e /cancelar | um PATCH generico seria atalho para contornar validacao de disponibilidade, conflito de agenda (RN03), historico (RN10) e aviso aos inscritos |
 
 ---
 

@@ -162,9 +162,7 @@ async function main() {
     const { rows: existentes } = await cliente.query('SELECT id FROM usuarios');
 
     if (existentes.length > 0) {
-      abortar(
-        `Usuario ja cadastrado`
-      );
+      abortar(`Usuario ja cadastrado`);
     }
 
     const id = randomUUID();
