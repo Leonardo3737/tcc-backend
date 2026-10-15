@@ -438,6 +438,41 @@ async function main() {
     api('POST', `/monitorias/${monitoria.id}/ativar`, { token: professor.token }),
   );
 
+  /**
+   * Edicao de dados basicos. Monitoria e disciplina ja tinham PATCH; o do
+   * atendimento aparece na secao 5, depois que existe um para editar.
+   */
+  await esperarSucesso(
+    'Professor edita dados basicos da monitoria',
+    api('PATCH', `/monitorias/${monitoria.id}`, {
+      token: professor.token,
+      corpo: { descricao: 'Foco em exercicios de prova.' },
+    }),
+  );
+
+  const disciplinaEditada = await esperarSucesso(
+    'Professor renomeia a disciplina',
+    api('PATCH', `/disciplinas/${disciplina.id}`, {
+      token: professor.token,
+      corpo: { nome: 'Calculo Diferencial e Integral I' },
+    }),
+  );
+
+  if (disciplinaEditada.codigo === disciplina.codigo) {
+    ok('Renomear nao muda o codigo gerado', disciplinaEditada.codigo);
+  } else {
+    falhou('O codigo mudou ao renomear', `${disciplina.codigo} -> ${disciplinaEditada.codigo}`);
+  }
+
+  await esperarRecusa(
+    'RN: aluno NAO pode editar a monitoria (403)',
+    403,
+    api('PATCH', `/monitorias/${monitoria.id}`, {
+      token: monitorado.token,
+      corpo: { descricao: 'Invasao' },
+    }),
+  );
+
   secao('3. Participantes — papeis dentro da monitoria');
   const vinculoMonitora = await esperarSucesso(
     'Professor habilita Ana como MONITOR (RN01)',
@@ -538,6 +573,69 @@ async function main() {
         modalidade: 'REMOTO',
         local: 'https://meet.exemplo/abc',
       },
+    }),
+  );
+
+  const editado = await esperarSucesso(
+    'Monitor edita dados basicos do atendimento',
+    api('PATCH', `/atendimentos/${atendimento.id}`, {
+      token: monitora.token,
+      corpo: { assunto: 'Limites e continuidade', local: 'Sala 203', vagas: 4 },
+    }),
+  );
+
+  if (
+    editado.assunto === 'Limites e continuidade' &&
+    editado.local === 'Sala 203' &&
+    editado.vagas === 4
+  ) {
+    ok('Assunto, local e vagas atualizados');
+  } else {
+    falhou('Edicao nao refletiu na resposta', JSON.stringify(editado));
+  }
+
+  const horarioPreservado =
+    new Date(editado.inicio).getTime() === horario.inicio.getTime() &&
+    editado.status === 'AGENDADO';
+
+  if (horarioPreservado) {
+    ok('Editar nao mexe em horario nem status — isso e /reagendar e /cancelar');
+  } else {
+    falhou('A edicao alterou horario ou status', JSON.stringify(editado));
+  }
+
+  await esperarRecusa(
+    'Editar NAO aceita horario: campo desconhecido e recusado (400)',
+    400,
+    api('PATCH', `/atendimentos/${atendimento.id}`, {
+      token: monitora.token,
+      corpo: { inicio: new Date(horario.inicio.getTime() + 3600_000).toISOString() },
+    }),
+  );
+
+  /**
+   * O atendimento tem 1 inscrito (o proprio solicitante), entao `vagas: 1` e o
+   * limite exato do permitido — reduzir mais deixaria mais gente dentro do que
+   * capacidade.
+   *
+   * A RECUSA (vagas < inscritos) nao e verificavel aqui: exigiria dois
+   * inscritos no mesmo atendimento, o que este fluxo nao produz. Fica coberta
+   * no teste de unidade, onde a contagem e controlavel.
+   */
+  await esperarSucesso(
+    'Vagas iguais ao numero de inscritos e aceito (limite exato)',
+    api('PATCH', `/atendimentos/${atendimento.id}`, {
+      token: monitora.token,
+      corpo: { vagas: 1 },
+    }),
+  );
+
+  await esperarRecusa(
+    'RN: aluno de fora NAO pode editar o atendimento (403)',
+    403,
+    api('PATCH', `/atendimentos/${atendimento.id}`, {
+      token: estranho.token,
+      corpo: { assunto: 'Invasao' },
     }),
   );
 

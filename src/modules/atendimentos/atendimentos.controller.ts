@@ -6,6 +6,7 @@ import {
   HttpStatus,
   Param,
   ParseUUIDPipe,
+  Patch,
   Post,
   Query,
 } from '@nestjs/common';
@@ -25,6 +26,7 @@ import { RespostaPaginada } from '../../common/dto/resposta-paginada.dto';
 import { UsuarioAutenticado } from '../../common/types/usuario-autenticado';
 import { AtendimentosService } from './atendimentos.service';
 import { AtendimentoRespostaDto, HistoricoStatusRespostaDto } from './dto/atendimento-resposta.dto';
+import { AtualizarAtendimentoDto } from './dto/atualizar-atendimento.dto';
 import { CancelarAtendimentoDto } from './dto/cancelar-atendimento.dto';
 import { FiltroAtendimentosDto } from './dto/filtro-atendimentos.dto';
 import { ReagendarAtendimentoDto } from './dto/reagendar-atendimento.dto';
@@ -145,6 +147,40 @@ export class AtendimentosController {
     @UsuarioAtual() usuario: UsuarioAutenticado,
   ): Promise<AtendimentoRespostaDto> {
     return this.atendimentosService.reagendar(atendimentoId, dto, usuario);
+  }
+
+  /**
+   * Dados basicos da sessao. NAO inclui horario nem status.
+   *
+   * Este e o unico PATCH do modulo, e a divisao com as demais rotas e
+   * proposital: `reagendar`, `realizar` e `cancelar` sao operacoes de dominio
+   * com pre-condicoes e efeitos proprios, enquanto assunto, local, modalidade e
+   * vagas sao apenas dados. Juntar tudo num PATCH generico apagaria essa
+   * distincao e abriria um caminho sem as validacoes de horario.
+   *
+   * `modalidade` nao esta aqui: ela e definida no agendamento e nao muda. Quem
+   * se inscreveu escolheu uma sessao presencial ou remota.
+   */
+  @Patch(':atendimentoId')
+  @ApiOperation({
+    summary: 'Edita dados basicos de um atendimento AGENDADO. Monitor da sessao ou professor.',
+    description:
+      'Assunto, local e vagas. Horario muda apenas por /reagendar, que valida ' +
+      'disponibilidade e avisa os inscritos; status muda por /realizar e /cancelar; ' +
+      'modalidade e definida no agendamento e nao muda. Enviar `local` vazio remove ' +
+      'o local.',
+  })
+  @ApiOkResponse({ type: AtendimentoRespostaDto })
+  @ApiConflictResponse({
+    description: 'Atendimento nao esta AGENDADO, ou vagas abaixo do numero de inscritos.',
+    type: RespostaErro,
+  })
+  atualizar(
+    @Param('atendimentoId', ParseUUIDPipe) atendimentoId: string,
+    @Body() dto: AtualizarAtendimentoDto,
+    @UsuarioAtual() usuario: UsuarioAutenticado,
+  ): Promise<AtendimentoRespostaDto> {
+    return this.atendimentosService.atualizar(atendimentoId, dto, usuario);
   }
 
   /**
