@@ -72,6 +72,25 @@ export const envValidationSchema = Joi.object({
    */
   AGENDAMENTO_DURACAO_MINIMA_MINUTOS: Joi.number().integer().min(5).max(600).default(15),
   AGENDAMENTO_DURACAO_MAXIMA_MINUTOS: Joi.number().integer().min(15).max(1440).default(240),
+
+  /**
+   * B1 — duracao sugerida. Precisa caber ENTRE as outras duas, e isso e
+   * verificado no boot: um padrao fora da faixa faria o cliente propor um
+   * horario que o proprio servidor recusaria em seguida, sem explicacao obvia.
+   */
+  AGENDAMENTO_DURACAO_PADRAO_MINUTOS: Joi.number()
+    .integer()
+    .min(5)
+    .max(1440)
+    .default(60)
+    .min(Joi.ref('AGENDAMENTO_DURACAO_MINIMA_MINUTOS'))
+    .max(Joi.ref('AGENDAMENTO_DURACAO_MAXIMA_MINUTOS'))
+    .messages({
+      'number.min':
+        'AGENDAMENTO_DURACAO_PADRAO_MINUTOS nao pode ser menor que AGENDAMENTO_DURACAO_MINIMA_MINUTOS.',
+      'number.max':
+        'AGENDAMENTO_DURACAO_PADRAO_MINUTOS nao pode ser maior que AGENDAMENTO_DURACAO_MAXIMA_MINUTOS.',
+    }),
   AGENDAMENTO_ANTECEDENCIA_MINIMA_MINUTOS: Joi.number().integer().min(0).max(10080).default(0),
   CANCELAMENTO_ANTECEDENCIA_MINIMA_MINUTOS: Joi.number().integer().min(0).max(10080).default(0),
 });

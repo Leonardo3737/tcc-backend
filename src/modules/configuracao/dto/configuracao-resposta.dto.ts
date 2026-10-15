@@ -4,6 +4,16 @@ export class LimitesAgendamentoDto {
   @ApiProperty({ example: 15 }) duracaoMinimaMinutos: number;
   @ApiProperty({ example: 240 }) duracaoMaximaMinutos: number;
 
+  /**
+   * Duracao sugerida, entre o minimo e o maximo.
+   *
+   * Permite ao cliente oferecer duracao em botoes ("30 min / 1 h / 1 h 30") em
+   * vez de exigir inicio E termino digitados, e e o tamanho de slot usado por
+   * GET /monitorias/:id/horarios-livres.
+   */
+  @ApiProperty({ example: 60, description: 'Duracao sugerida para um atendimento.' })
+  duracaoPadraoMinutos: number;
+
   @ApiProperty({ example: 0, description: '0 = qualquer horario futuro e aceito.' })
   antecedenciaMinimaMinutos: number;
 

@@ -222,7 +222,7 @@ sem `Bearer`). O `persistAuthorization` mantém o token entre recarregamentos.
 npm run test
 ```
 
-266 testes de unidade, sem banco, cobrindo o que o PostgreSQL **não** alcança:
+298 testes de unidade, sem banco, cobrindo o que o PostgreSQL **não** alcança:
 autorização, papéis, transições de estado, propriedade de recurso, campos
 derivados e tradução de erro.
 
@@ -237,6 +237,7 @@ derivados e tradução de erro.
 | `bloco-b.spec.ts` | busca de alunos, campos derivados do atendimento, reagendamento |
 | `swagger-paginacao.spec.ts` | gera o documento OpenAPI real e afirma que `dados` está descrito |
 | `criacao-de-usuarios.spec.ts` | autorização e autoria, domínio institucional, ausência de rota pública de registro, senha gerada pelo servidor e rollback quando o e-mail não sai |
+| `ajustes-api.spec.ts` | horários livres (janela, duração, agenda do solicitante), filtros de agenda pessoal, lote com falha parcial, promoção atômica, regras de pontuação |
 | `logs.spec.ts` | redação de senha, código e token em qualquer profundidade; identificação do usuário pelo token; falha isolada |
 | `notificacoes.spec.ts` | destinatário por tipo, idempotência, chave de transição, fuso da mensagem, reenvio e falha isolada |
 | `disciplinas.spec.ts` | geração do código (prefixo, acentos, numeração, largura) e nova tentativa quando a constraint recusa |
@@ -255,7 +256,7 @@ Com o banco semeado (`npm run db:seed`) e o servidor rodando em outro terminal:
 npm run test:fluxo
 ```
 
-**135 verificações**, todas passando contra PostgreSQL 17. O seeder passou a ser
+**151 verificações**, todas passando contra PostgreSQL 17. O seeder passou a ser
 pré-requisito: sem auto-cadastro, o script precisa de um professor que ele não
 pode criar — que é exatamente a restrição verificada nas primeiras linhas.
 [scripts/fluxo-completo.mjs](scripts/fluxo-completo.mjs) percorre o fluxo inteiro
@@ -881,6 +882,9 @@ encerrar e remover são transições de estado (RN10).
 | Método | Rota | Acesso |
 |---|---|---|
 | `POST` `GET` | `/api/monitorias/:monitoriaId/atendimentos` | MONITOR ou MONITORADO / participante |
+| `GET` | `/api/monitorias/:monitoriaId/atendimentos/horarios-livres` | autenticado — slots livres (**sugestão, não reserva**) |
+| `POST` | `/api/monitorias/:monitoriaId/atendimentos/lote` | MONITOR ou MONITORADO — série recorrente, **sucesso parcial** (200) |
+| `POST` | `/api/monitorias/:monitoriaId/participantes/:participanteId/promover-a-monitor` | professor responsável (RN01) |
 | `GET` | `/api/atendimentos/meus` | autenticado |
 | `GET` | `/api/atendimentos/:id` · `/:id/historico` | participante da monitoria |
 | `POST` | `/api/atendimentos/:id/inscricao` · `/inscricao/cancelar` | MONITORADO |
@@ -906,6 +910,7 @@ encerrar e remover são transições de estado (RN10).
 
 | Método | Rota | Acesso |
 |---|---|---|
+| `GET` | `/api/gamificacao/regras` | autenticado — tabela de pontos |
 | `GET` | `/api/gamificacao/ranking` | autenticado |
 | `GET` | `/api/gamificacao/meus-pontos` | autenticado |
 | `GET` | `/api/analytics/resumo` | **PROFESSOR** |

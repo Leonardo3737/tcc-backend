@@ -83,6 +83,16 @@ export const configuration = () => ({
     /** D-15: limites de agendamento. Ver env.validation.ts para os defaults. */
     duracaoMinimaMinutos: Number(process.env.AGENDAMENTO_DURACAO_MINIMA_MINUTOS ?? 15),
     duracaoMaximaMinutos: Number(process.env.AGENDAMENTO_DURACAO_MAXIMA_MINUTOS ?? 240),
+
+    /**
+     * B1 — duracao sugerida, entre o minimo e o maximo.
+     *
+     * Existe para o cliente nao precisar inventar um valor: e o tamanho de slot
+     * de /horarios-livres e o padrao dos botoes de duracao, que substituem
+     * digitar inicio E fim. A coerencia com os outros dois e verificada no boot
+     * (ver env.validation.ts).
+     */
+    duracaoPadraoMinutos: Number(process.env.AGENDAMENTO_DURACAO_PADRAO_MINUTOS ?? 60),
     antecedenciaMinimaMinutos: Number(process.env.AGENDAMENTO_ANTECEDENCIA_MINIMA_MINUTOS ?? 0),
     cancelamentoAntecedenciaMinutos: Number(
       process.env.CANCELAMENTO_ANTECEDENCIA_MINIMA_MINUTOS ?? 0,

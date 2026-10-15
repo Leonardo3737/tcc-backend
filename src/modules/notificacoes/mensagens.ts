@@ -150,6 +150,24 @@ export interface ContextoDaMensagem {
 
   /** Quantos monitorados confirmados. So interessa ao monitor. */
   inscritos?: number;
+
+  /**
+   * Inscricoes canceladas pela promocao a monitor (A3).
+   *
+   * Zero na habilitacao comum. Quando ha, o texto precisa explicar a causa
+   * junto com o efeito — senao a pessoa recebe "voce virou monitor" e descobre
+   * sozinha, depois, que perdeu as vagas que tinha.
+   */
+  inscricoesCanceladas?: number;
+
+  /**
+   * Outras sessoes criadas no mesmo lote (A2). Zero no agendamento avulso.
+   *
+   * O lote emite UM evento para a serie inteira; este numero e o que permite a
+   * mensagem dizer "e mais N sessoes" em vez de o monitorado receber um e-mail
+   * por ocorrencia.
+   */
+  demaisSessoes?: number;
 }
 
 /**
@@ -274,17 +292,35 @@ export const MENSAGENS: Record<TipoNotificacao, (contexto: ContextoDaMensagem) =
     ].join('\n'),
   }),
 
-  [TipoNotificacao.ATENDIMENTO_OFERTADO]: ({ nome, dados, fuso, link }) => ({
+  /**
+   * Um aviso serve tanto para a sessao avulsa quanto para a serie inteira.
+   *
+   * Quando o lote (A2) cria varias, o monitorado recebe UM e-mail: o detalhe da
+   * primeira sessao e uma linha dizendo quantas outras vieram junto. Um e-mail
+   * por ocorrencia encheria a caixa e faria quem marcasse spam derrubar a
+   * entrega do lembrete do dia, que e o aviso que de fato importa.
+   */
+  [TipoNotificacao.ATENDIMENTO_OFERTADO]: ({ nome, dados, fuso, link, demaisSessoes }) => ({
     assunto: `Novo horario de monitoria disponivel: ${dados.disciplina}`,
     corpo: [
       `Ola, ${nome}.`,
       '',
-      'Foi aberto um novo horario de monitoria na sua disciplina:',
+      demaisSessoes
+        ? 'Foi aberta uma serie de horarios de monitoria na sua disciplina. O primeiro:'
+        : 'Foi aberto um novo horario de monitoria na sua disciplina:',
       '',
       ...blocoDoAtendimento(dados, fuso),
+      ...(demaisSessoes
+        ? [
+            '',
+            demaisSessoes === 1
+              ? 'E mais 1 sessao na mesma faixa de horario.'
+              : `E mais ${demaisSessoes} sessoes na mesma faixa de horario.`,
+          ]
+        : []),
       '',
       'As vagas sao limitadas.',
-      ...acesse('Inscrever-se', link),
+      ...acesse(demaisSessoes ? 'Ver a agenda da monitoria' : 'Inscrever-se', link),
     ].join('\n'),
   }),
 
@@ -304,12 +340,21 @@ export const MENSAGENS: Record<TipoNotificacao, (contexto: ContextoDaMensagem) =
   }),
 
   /** Nao fala de atendimento: o unico tipo cujo bloco nao se aplica. */
-  [TipoNotificacao.MONITOR_HABILITADO]: ({ nome, dados, link }) => ({
+  [TipoNotificacao.MONITOR_HABILITADO]: ({ nome, dados, link, inscricoesCanceladas }) => ({
     assunto: `Voce agora e monitor(a) de ${dados.disciplina}`,
     corpo: [
       `Ola, ${nome}.`,
       '',
       `Voce foi habilitado(a) como MONITOR(A) na monitoria de ${dados.disciplina}.`,
+      ...(inscricoesCanceladas
+        ? [
+            '',
+            inscricoesCanceladas === 1
+              ? 'Como voce passou de monitorado(a) a monitor(a), sua inscricao em 1 atendimento'
+              : `Como voce passou de monitorado(a) a monitor(a), suas inscricoes em ${inscricoesCanceladas} atendimentos`,
+            'desta monitoria foi cancelada — agora voce conduz as sessoes, em vez de assistir.',
+          ]
+        : []),
       '',
       'Proximos passos na plataforma:',
       '  1. declare sua disponibilidade semanal;',

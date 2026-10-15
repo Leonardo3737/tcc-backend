@@ -55,6 +55,39 @@ export class FiltroAtendimentosDto extends PaginacaoDto {
   @IsBoolean({ message: 'aceitandoInscricao deve ser booleano' })
   aceitandoInscricao?: boolean;
 
+  /**
+   * A4 — fila de registro de presenca do MONITOR.
+   *
+   * Sessao que ja comecou e continua AGENDADA esta esperando um ato dele. A
+   * consequencia de ninguem ver essa fila nao e cosmetica: sem REALIZADO e
+   * PRESENTE, o aluno nao pode avaliar (RN06) e ninguem pontua.
+   */
+  @ApiPropertyOptional({
+    description:
+      'true devolve apenas sessoes AGENDADAS que ja comecaram e em que voce e o MONITOR. ' +
+      'So funciona em GET /atendimentos/meus.',
+  })
+  @IsOptional()
+  @Transform(({ value }) => (value === 'true' ? true : value === 'false' ? false : value))
+  @IsBoolean({ message: 'aguardandoRegistro deve ser booleano' })
+  aguardandoRegistro?: boolean;
+
+  /**
+   * A4 — o que VOCE ainda pode avaliar.
+   *
+   * Usa o mesmo criterio de `InscricaoRespostaDto.podeAvaliar`, para que a
+   * lista e o botao nunca discordem.
+   */
+  @ApiPropertyOptional({
+    description:
+      'true devolve apenas atendimentos REALIZADOS em que voce esteve PRESENTE e ainda ' +
+      'nao avaliou. So funciona em GET /atendimentos/meus.',
+  })
+  @IsOptional()
+  @Transform(({ value }) => (value === 'true' ? true : value === 'false' ? false : value))
+  @IsBoolean({ message: 'pendentesDeAvaliacao deve ser booleano' })
+  pendentesDeAvaliacao?: boolean;
+
   @ApiPropertyOptional({
     enum: CampoOrdenacaoAtendimento,
     default: CampoOrdenacaoAtendimento.INICIO,

@@ -784,6 +784,25 @@ centralizadas e ordenadas** em `database/migrations/`.
 
 ---
 
+### 8.4 Rotas acrescentadas pela auditoria de usabilidade
+
+Seis adições pensadas a partir do que o frontend não conseguia montar sozinho.
+Nenhuma exigiu migration.
+
+| Rota | O que resolve |
+|---|---|
+| `GET /monitorias/:id/atendimentos/horarios-livres` | substitui data/início/fim digitados por slots clicáveis. **Sugestão, não reserva** — o cálculo é do instante da consulta e a verificação autoritativa continua no `POST` (AD-20) |
+| `POST /monitorias/:id/atendimentos/lote` | série recorrente em uma requisição, com **sucesso parcial** (AD-21) |
+| `POST /monitorias/:id/participantes/:id/promover-a-monitor` | promoção atômica, substituindo `encerrar` + `POST /monitores`, que podia deixar o aluno sem vínculo nenhum |
+| `GET /gamificacao/regras` | expõe a tabela de pontos, hoje constante privada do service |
+| `GET /atendimentos/meus?aguardandoRegistro` | fila de registro de presença do monitor — sem ela, nada vira `REALIZADO` e ninguém avalia (RN06) |
+| `GET /atendimentos/meus?pendentesDeAvaliacao` | o que o aluno ainda pode avaliar, pelo mesmo critério de `podeAvaliar` |
+
+`GET /configuracao` ganhou `duracaoPadraoMinutos`, validado no boot para caber
+entre o mínimo e o máximo.
+
+---
+
 ## 11. Decisões arquiteturais registradas
 
 | ID | Decisão | Escolha | Motivo |
@@ -807,6 +826,8 @@ centralizadas e ordenadas** em `database/migrations/`.
 | AD-17 | Notificacoes | tabela com UNIQUE (tipo, referencia_id, usuario_id) e corpo gravado; reserva ANTES do envio; transicoes referenciam a linha de historico; o cancelamento leva os inscritos no proprio evento | reservar depois permitiria envio duplicado entre instancias; referenciar o atendimento descartaria o aviso do segundo reagendamento |
 | AD-18 | Trilha de requisicoes | uma linha por requisicao, com redacao por nome de campo; sucesso pelo interceptor, erros pelo filtro global | guard que rejeita impede o interceptor de rodar, entao 401/403 so existem no filtro; gravar corpo cru exporia senha, codigo e token em texto claro |
 | AD-19 | Edicao de dados basicos | PATCH separado das operacoes de dominio: horario so por /reagendar, status so por /realizar e /cancelar | um PATCH generico seria atalho para contornar validacao de disponibilidade, conflito de agenda (RN03), historico (RN10) e aviso aos inscritos |
+| AD-20 | Horarios livres calculados no servidor | `GET /monitorias/:id/atendimentos/horarios-livres` expande as faixas semanais em SQL e subtrai agenda do monitor e do solicitante | o cliente nao tem como calcular: fuso institucional em `AT TIME ZONE`, inscricoes do solicitante em monitorias que ele nao pode ler, e antecedencia medida contra o relogio do servidor |
+| AD-21 | Agendamento em lote com sucesso parcial | cada ocorrencia em sua propria transacao; resposta 200 com o resultado de cada uma; UM evento de notificacao para a serie | tudo-ou-nada faria um feriado derrubar a serie inteira, que e o problema que o endpoint existe para resolver; um evento por ocorrencia geraria centenas de e-mails de uma vez |
 
 ---
 

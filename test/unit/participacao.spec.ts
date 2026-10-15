@@ -71,6 +71,8 @@ function montar(sobrescreve: Record<string, unknown> = {}) {
     inscricaoModel as never,
     participacaoService as never,
     eventos as never,
+    // Sequelize: a promocao a monitor abre transacao; o dublê executa direto.
+    { transaction: jest.fn((cb: (t: unknown) => unknown) => cb({})) } as never,
   );
 
   return {

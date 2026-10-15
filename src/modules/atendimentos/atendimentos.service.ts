@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  HttpException,
   ConflictException,
   ForbiddenException,
   Injectable,
@@ -18,6 +19,7 @@ import { StatusAtendimento } from '../../common/enums/status-atendimento.enum';
 import { StatusInscricao } from '../../common/enums/status-inscricao.enum';
 import { StatusParticipacao } from '../../common/enums/status-participacao.enum';
 import { UsuarioAutenticado } from '../../common/types/usuario-autenticado';
+import { mensagemDeConstraint } from '../../common/filters/todas-excecoes.filter';
 import { DisponibilidadesService } from '../disponibilidades/disponibilidades.service';
 import { AtendimentoRealizadoEvento, EVENTO_ATENDIMENTO_REALIZADO } from '../gamificacao/eventos';
 import {
@@ -39,6 +41,10 @@ import { Aluno } from '../usuarios/entities/aluno.model';
 import { Usuario } from '../usuarios/entities/usuario.model';
 import { AgendarAtendimentoDto } from './dto/agendar-atendimento.dto';
 import { AtualizarAtendimentoDto } from './dto/atualizar-atendimento.dto';
+import { AgendarAtendimentosEmLoteDto } from './dto/agendar-em-lote.dto';
+import { FiltroHorariosLivresDto } from './dto/filtro-horarios-livres.dto';
+import { LoteDeAtendimentosRespostaDto, ResultadoDeOcorrenciaDto } from './dto/lote-resposta.dto';
+import { HorariosLivresRespostaDto } from './dto/horario-livre.dto';
 import { AtendimentoRespostaDto, HistoricoStatusRespostaDto } from './dto/atendimento-resposta.dto';
 import { CampoOrdenacaoAtendimento, FiltroAtendimentosDto } from './dto/filtro-atendimentos.dto';
 import { ReagendarAtendimentoDto } from './dto/reagendar-atendimento.dto';
@@ -53,6 +59,25 @@ import { AtendimentoStatusHistorico } from './entities/atendimento-status-histor
  * O cliente nunca escolhe o nome da coluna: ele escolhe uma chave deste mapa.
  * Qualquer valor fora do enum ja foi rejeitado pelo ValidationPipe antes daqui.
  */
+/**
+ * Campos de agendamento que o avulso e o lote compartilham.
+ *
+ * `resolverAgendador` e `criarUmAtendimento` so precisam destes; tipa-los assim
+ * evita que o lote tenha de fabricar um `AgendarAtendimentoDto` com inicio e
+ * fim falsos so para satisfazer a assinatura.
+ */
+type DadosComunsDeAgendamento = Pick<
+  AgendarAtendimentoDto,
+  'monitorParticipanteId' | 'assunto' | 'modalidade' | 'local' | 'vagas'
+>;
+
+/** A1 — tetos da consulta de horarios livres. */
+const MAX_JANELA_DIAS = 60;
+const MAX_SLOTS = 500;
+
+/** Sentinela para manter a consulta com uma forma so quando nao ha vinculo. */
+const SEM_VINCULO = '00000000-0000-0000-0000-000000000000';
+
 const COLUNA_DE_ORDENACAO: Record<CampoOrdenacaoAtendimento, string> = {
   [CampoOrdenacaoAtendimento.INICIO]: 'inicio',
   [CampoOrdenacaoAtendimento.CRIADO_EM]: 'created_at',
@@ -131,11 +156,168 @@ export class AtendimentosService {
     dto: AgendarAtendimentoDto,
     usuario: UsuarioAutenticado,
   ): Promise<AtendimentoRespostaDto> {
+    const atendimentoId = await this.criarUmAtendimento(
+      contexto,
+      dto,
+      usuario,
+      dto.inicio,
+      dto.fim,
+    );
+
+    /**
+     * Emitido DEPOIS do commit: um ouvinte que consultasse o atendimento dentro
+     * da transacao nao o encontraria. Quem escuta nao e conhecido aqui.
+     */
+    this.eventos.emit(
+      EVENTO_ATENDIMENTO_AGENDADO,
+      new AtendimentoAgendadoEvento(
+        atendimentoId,
+        contexto.monitoria.id,
+        await this.origemDe(contexto, dto),
+        usuario.id,
+      ),
+    );
+
+    return this.carregarResposta(atendimentoId);
+  }
+
+  /**
+   * A2 — serie de sessoes recorrentes em uma requisicao.
+   *
+   * Abrir 15 sessoes semanais uma a uma e trabalho repetido que ninguem conclui,
+   * e o resultado pratico e monitoria com dois horarios cadastrados em vez de
+   * quinze.
+   *
+   * SUCESSO PARCIAL, NAO TUDO-OU-NADA. Cada ocorrencia roda na propria
+   * transacao: um feriado ou um choque pontual no meio da serie nao pode
+   * derrubar as outras catorze — seria exatamente o problema que motiva este
+   * endpoint existir. Por isso a resposta e 200 com o resultado de cada uma, e
+   * nao 201.
+   */
+  async agendarEmLote(
+    contexto: ContextoParticipacao,
+    dto: AgendarAtendimentosEmLoteDto,
+    usuario: UsuarioAutenticado,
+  ): Promise<LoteDeAtendimentosRespostaDto> {
+    const resultados: ResultadoDeOcorrenciaDto[] = [];
+    let primeiroCriadoId: string | null = null;
+
+    for (const ocorrencia of dto.ocorrencias) {
+      try {
+        const id = await this.criarUmAtendimento(
+          contexto,
+          dto,
+          usuario,
+          ocorrencia.inicio,
+          ocorrencia.fim,
+        );
+
+        primeiroCriadoId ??= id;
+        resultados.push({ ...ocorrencia, criado: true, atendimentoId: id });
+      } catch (erro) {
+        /**
+         * A falha de uma ocorrencia vira dado na resposta, nao excecao.
+         *
+         * Apenas erros de REGRA sao absorvidos, e eles vem por DOIS caminhos:
+         * validacao no service (HttpException) e violacao de constraint no
+         * banco. O segundo e o mais comum numa serie recorrente — o conflito da
+         * RN03 e detectado pelo EXCLUDE, nao por SELECT previo —, e tratar so o
+         * primeiro faria um unico choque de horario derrubar as outras catorze.
+         *
+         * Qualquer outra coisa sobe: engolir falha de infraestrutura
+         * transformaria indisponibilidade do banco em "13 de 15 criados".
+         */
+        const mensagem = this.mensagemDeFalha(erro);
+
+        if (mensagem === null) {
+          throw erro;
+        }
+
+        resultados.push({ ...ocorrencia, criado: false, erro: mensagem });
+      }
+    }
+
+    /**
+     * UM evento para a serie inteira, referente a primeira ocorrencia.
+     *
+     * Um evento por ocorrencia significaria, num lote de 16 sessoes com 20
+     * monitorados, 320 e-mails de uma vez: queima a cota do provedor, e quem
+     * marcar como spam derruba a entrega do lembrete do dia — que e o aviso que
+     * de fato importa. A mensagem menciona as demais sessoes em uma linha.
+     */
+    const criados = resultados.filter((r) => r.criado).length;
+
+    if (primeiroCriadoId) {
+      this.eventos.emit(
+        EVENTO_ATENDIMENTO_AGENDADO,
+        new AtendimentoAgendadoEvento(
+          primeiroCriadoId,
+          contexto.monitoria.id,
+          await this.origemDe(contexto, dto),
+          usuario.id,
+          criados - 1,
+        ),
+      );
+    }
+
+    return { criados, recusados: resultados.length - criados, resultados };
+  }
+
+  /**
+   * Mensagem de dominio da recusa, ou `null` se o erro nao for de regra.
+   *
+   * `null` e o sinal para relancar: so falha de REGRA vira linha recusada no
+   * lote.
+   */
+  private mensagemDeFalha(erro: unknown): string | null {
+    const deConstraint = mensagemDeConstraint(erro);
+
+    if (deConstraint) {
+      return deConstraint;
+    }
+
+    if (!(erro instanceof HttpException)) {
+      return null;
+    }
+
+    const corpo = erro.getResponse();
+
+    if (typeof corpo === 'string') {
+      return corpo;
+    }
+
+    const mensagem = (corpo as { message?: string | string[] }).message;
+
+    return Array.isArray(mensagem) ? mensagem.join('; ') : (mensagem ?? erro.message);
+  }
+
+  private async origemDe(
+    contexto: ContextoParticipacao,
+    dto: DadosComunsDeAgendamento,
+  ): Promise<OrigemAtendimento> {
+    const { origem } = await this.resolverAgendador(contexto, dto);
+    return origem;
+  }
+
+  /**
+   * Nucleo do agendamento, sem emissao de evento.
+   *
+   * Extraido para que o lote reaproveite exatamente as mesmas regras — duplicar
+   * isso criaria dois caminhos que divergem na primeira mudanca de validacao.
+   * O evento fica fora porque o lote emite UM para a serie inteira.
+   */
+  private async criarUmAtendimento(
+    contexto: ContextoParticipacao,
+    dto: DadosComunsDeAgendamento,
+    usuario: UsuarioAutenticado,
+    inicioTexto: string,
+    fimTexto: string,
+  ): Promise<string> {
     const monitoria = contexto.monitoria;
     this.monitoriasService.exigirMonitoriaAtiva(monitoria);
 
-    const inicio = new Date(dto.inicio);
-    const fim = new Date(dto.fim);
+    const inicio = new Date(inicioTexto);
+    const fim = new Date(fimTexto);
     this.validarIntervalo(inicio, fim);
 
     const { monitorParticipante, origem, inscreverSolicitante } = await this.resolverAgendador(
@@ -152,7 +334,7 @@ export class AtendimentosService {
       throw new BadRequestException('vagas deve ser no minimo 1.');
     }
 
-    const atendimentoId = await this.sequelize.transaction(async (transaction) => {
+    return this.sequelize.transaction(async (transaction) => {
       const atendimento = await this.atendimentoModel.create(
         {
           monitoriaId: monitoria.id,
@@ -199,17 +381,6 @@ export class AtendimentosService {
 
       return atendimento.id;
     });
-
-    /**
-     * Emitido DEPOIS do commit: um ouvinte que consultasse o atendimento dentro
-     * da transacao nao o encontraria. Quem escuta nao e conhecido aqui.
-     */
-    this.eventos.emit(
-      EVENTO_ATENDIMENTO_AGENDADO,
-      new AtendimentoAgendadoEvento(atendimentoId, monitoria.id, origem, usuario.id),
-    );
-
-    return this.carregarResposta(atendimentoId);
   }
 
   /**
@@ -221,7 +392,7 @@ export class AtendimentosService {
    */
   private async resolverAgendador(
     contexto: ContextoParticipacao,
-    dto: AgendarAtendimentoDto,
+    dto: DadosComunsDeAgendamento,
   ): Promise<{
     monitorParticipante: MonitoriaParticipante;
     origem: OrigemAtendimento;
@@ -591,6 +762,143 @@ export class AtendimentosService {
   }
 
   /**
+   * A1 — slots concretos e clicaveis, para o cliente nao precisar adivinhar.
+   *
+   * O calculo NAO cabe no frontend, e nao por comodidade: a expansao das faixas
+   * semanais depende de `AT TIME ZONE` com o fuso da instituicao, o conflito do
+   * solicitante envolve inscricoes dele em monitorias que ele talvez nao possa
+   * ler, e a antecedencia minima se mede contra o relogio do servidor. Qualquer
+   * uma das tres calculada no cliente produziria sugestao que o POST recusaria.
+   *
+   * E SUGESTAO, NAO RESERVA. A resposta e uma fotografia do instante da
+   * consulta: dois usuarios podem receber o mesmo slot, e quem agendar primeiro
+   * fica com ele. A verificacao autoritativa continua no POST, contra as
+   * constraints.
+   *
+   * Tudo em uma consulta so, em SQL, pela mesma razao de `validarJanela`:
+   * expandir faixas semanais em JavaScript traria o fuso do processo Node para
+   * dentro da regra.
+   */
+  async horariosLivres(
+    monitoriaId: string,
+    filtro: FiltroHorariosLivresDto,
+    usuario: UsuarioAutenticado,
+  ): Promise<HorariosLivresRespostaDto> {
+    const de = new Date(filtro.de);
+    const ate = new Date(filtro.ate);
+
+    if (ate <= de) {
+      throw new BadRequestException('ate deve ser posterior a de.');
+    }
+
+    if (ate.getTime() - de.getTime() > MAX_JANELA_DIAS * 24 * 3600_000) {
+      throw new BadRequestException(
+        `A janela entre de e ate nao pode passar de ${MAX_JANELA_DIAS} dias.`,
+      );
+    }
+
+    const duracao =
+      filtro.duracaoMinutos ?? this.config.get<number>('agenda.duracaoPadraoMinutos') ?? 60;
+    const minima = this.config.get<number>('agenda.duracaoMinimaMinutos') ?? 15;
+    const maxima = this.config.get<number>('agenda.duracaoMaximaMinutos') ?? 240;
+
+    if (duracao < minima || duracao > maxima) {
+      throw new BadRequestException(
+        `duracaoMinutos deve estar entre ${minima} e ${maxima} (ver GET /configuracao).`,
+      );
+    }
+
+    /**
+     * Vinculos do SOLICITANTE, para subtrair a agenda dele.
+     *
+     * Professor sem perfil de aluno nao tem vinculo nenhum — o sentinela evita
+     * um `IN ()` vazio e mantem a consulta com uma unica forma.
+     */
+    const vinculos = await this.participacaoService.listarVinculosDoAluno(usuario.id);
+    const idsDoSolicitante = vinculos.length > 0 ? vinculos.map((v) => v.id) : [SEM_VINCULO];
+
+    const linhas = (await this.sequelize.query(
+      `
+      WITH dias AS (
+        SELECT d::date AS dia
+          FROM generate_series(
+                 (:de::timestamptz  AT TIME ZONE :fuso)::date,
+                 (:ate::timestamptz AT TIME ZONE :fuso)::date,
+                 interval '1 day') AS d
+      ),
+      faixas AS (
+        SELECT disp.participante_id, u.nome AS nome_monitor,
+               disp.dia_semana, disp.hora_inicio, disp.hora_fim
+          FROM disponibilidades disp
+          JOIN monitoria_participantes mp ON mp.id = disp.participante_id
+          JOIN usuarios u ON u.id = mp.aluno_id
+         WHERE disp.ativa
+           AND mp.monitoria_id = :monitoriaId
+           AND mp.papel = 'MONITOR'
+           AND mp.status = 'ATIVO'
+           AND (:monitorParticipanteId::uuid IS NULL OR mp.id = :monitorParticipanteId::uuid)
+      ),
+      slots AS (
+        SELECT f.participante_id, f.nome_monitor,
+               (s AT TIME ZONE :fuso)                                   AS inicio,
+               ((s + make_interval(mins => :duracao)) AT TIME ZONE :fuso) AS fim
+          FROM faixas f
+          JOIN dias ON EXTRACT(DOW FROM dias.dia) = f.dia_semana
+          CROSS JOIN LATERAL generate_series(
+                 dias.dia + f.hora_inicio,
+                 dias.dia + f.hora_fim - make_interval(mins => :duracao),
+                 make_interval(mins => :duracao)) AS s
+      )
+      SELECT slots.inicio, slots.fim,
+             slots.participante_id AS "monitorParticipanteId",
+             slots.nome_monitor    AS "nomeMonitor"
+        FROM slots
+       WHERE slots.inicio >= GREATEST(:de::timestamptz,
+                                      now() + make_interval(mins => :antecedencia))
+         AND slots.fim   <= :ate::timestamptz
+         AND NOT EXISTS (
+               SELECT 1 FROM atendimentos a
+                WHERE a.monitor_participante_id = slots.participante_id
+                  AND a.status = 'AGENDADO'
+                  AND tstzrange(a.inicio, a.fim) && tstzrange(slots.inicio, slots.fim))
+         AND NOT EXISTS (
+               SELECT 1 FROM atendimento_participantes ap
+                WHERE ap.participante_id IN (:idsDoSolicitante)
+                  AND ap.status IN ('INSCRITO', 'PRESENTE')
+                  AND tstzrange(ap.inicio, ap.fim) && tstzrange(slots.inicio, slots.fim))
+       ORDER BY slots.inicio, slots.nome_monitor
+       LIMIT :limite
+      `,
+      {
+        replacements: {
+          monitoriaId,
+          fuso: this.config.getOrThrow<string>('agenda.fusoHorario'),
+          de: de.toISOString(),
+          ate: ate.toISOString(),
+          duracao,
+          antecedencia: this.config.get<number>('agenda.antecedenciaMinimaMinutos') ?? 0,
+          monitorParticipanteId: filtro.monitorParticipanteId ?? null,
+          idsDoSolicitante,
+          limite: MAX_SLOTS + 1,
+        },
+        type: QueryTypes.SELECT,
+      },
+    )) as { inicio: Date; fim: Date; monitorParticipanteId: string; nomeMonitor: string }[];
+
+    const truncado = linhas.length > MAX_SLOTS;
+
+    return {
+      horarios: linhas.slice(0, MAX_SLOTS).map((linha) => ({
+        inicio: linha.inicio.toISOString(),
+        fim: linha.fim.toISOString(),
+        monitorParticipanteId: linha.monitorParticipanteId,
+        nomeMonitor: linha.nomeMonitor,
+      })),
+      truncado,
+    };
+  }
+
+  /**
    * Edicao dos dados basicos de uma sessao ja agendada.
    *
    * Deliberadamente SEM horario: `inicio` e `fim` mudam apenas por `reagendar`,
@@ -796,6 +1104,8 @@ export class AtendimentosService {
     filtro: FiltroAtendimentosDto,
     usuario?: UsuarioAutenticado,
   ): Promise<RespostaPaginada<AtendimentoRespostaDto>> {
+    this.recusarFiltrosPessoais(filtro);
+
     const where = this.montarFiltro(filtro);
     where.monitoriaId = monitoriaId;
 
@@ -831,6 +1141,18 @@ export class AtendimentosService {
     usuario: UsuarioAutenticado,
     filtro: FiltroAtendimentosDto,
   ): Promise<RespostaPaginada<AtendimentoRespostaDto>> {
+    /**
+     * Os dois recortam o mesmo conjunto por criterios opostos — um exige
+     * AGENDADO, o outro REALIZADO. Combina-los devolveria sempre lista vazia, o
+     * que o cliente leria como "nada pendente" em vez de "pedido incoerente".
+     */
+    if (filtro.aguardandoRegistro && filtro.pendentesDeAvaliacao) {
+      throw new BadRequestException(
+        'aguardandoRegistro e pendentesDeAvaliacao sao mutuamente exclusivos: ' +
+          'um exige AGENDADO e o outro REALIZADO.',
+      );
+    }
+
     const participacoes = await this.participacaoService.listarVinculosDoAluno(usuario.id);
     const idsParticipacao = participacoes.map((p) => p.id);
 
@@ -844,10 +1166,42 @@ export class AtendimentosService {
     });
 
     const where = this.montarFiltro(filtro);
-    where[Op.or as unknown as string] = [
-      { monitorParticipanteId: { [Op.in]: idsParticipacao } },
-      { id: { [Op.in]: inscricoes.map((i) => i.atendimentoId) } },
-    ];
+
+    if (filtro.aguardandoRegistro) {
+      /**
+       * Fila do monitor: so o que ELE conduz, ja comecado e ainda AGENDADO.
+       * Nao entra no OR abaixo porque aqui o recorte e exclusivamente o papel
+       * de monitor — inscricoes dele como monitorado nao pertencem a esta fila.
+       */
+      where.monitorParticipanteId = { [Op.in]: idsParticipacao };
+      where.status = StatusAtendimento.AGENDADO;
+      where.inicio = { [Op.lt]: new Date() };
+    } else if (filtro.pendentesDeAvaliacao) {
+      /**
+       * Mesmo criterio de `InscricaoRespostaDto.podeAvaliar`: REALIZADO,
+       * presenca confirmada e sem avaliacao minha. Expresso em SQL porque as
+       * duas ultimas condicoes vivem em tabelas filhas.
+       */
+      where.status = StatusAtendimento.REALIZADO;
+      where[Op.and as unknown as string] = [
+        this.sequelize.literal(
+          `EXISTS (
+             SELECT 1
+               FROM atendimento_participantes ap
+              WHERE ap.atendimento_id = "Atendimento"."id"
+                AND ap.participante_id IN (:vinculosDoAluno)
+                AND ap.status = 'PRESENTE'
+                AND NOT EXISTS (
+                      SELECT 1 FROM avaliacoes av
+                       WHERE av.atendimento_participante_id = ap.id))`,
+        ),
+      ];
+    } else {
+      where[Op.or as unknown as string] = [
+        { monitorParticipanteId: { [Op.in]: idsParticipacao } },
+        { id: { [Op.in]: inscricoes.map((i) => i.atendimentoId) } },
+      ];
+    }
 
     const { rows, count } = await this.atendimentoModel.findAndCountAll({
       where,
@@ -856,6 +1210,7 @@ export class AtendimentosService {
       limit: filtro.limite,
       offset: filtro.offset,
       distinct: true,
+      replacements: { vinculosDoAluno: idsParticipacao },
     });
 
     const contextos = await this.montarContextosDeAvaliacao(rows, usuario);
@@ -953,6 +1308,27 @@ export class AtendimentosService {
     const direcao = filtro.direcao === 'asc' ? 'ASC' : 'DESC';
 
     return [[coluna, direcao]];
+  }
+
+  /**
+   * A4 — os dois filtros de agenda pessoal nao fazem sentido fora de /meus.
+   *
+   * Ignorar em silencio seria pior que recusar: o cliente receberia uma lista
+   * plausivel, porem sem o recorte pedido, e o contador da tela sairia errado
+   * sem nenhum sinal. Mesmo raciocinio do `forbidNonWhitelisted`.
+   */
+  private recusarFiltrosPessoais(filtro: FiltroAtendimentosDto): void {
+    const pessoais = [
+      ['aguardandoRegistro', filtro.aguardandoRegistro],
+      ['pendentesDeAvaliacao', filtro.pendentesDeAvaliacao],
+    ].filter(([, valor]) => valor !== undefined);
+
+    if (pessoais.length > 0) {
+      throw new BadRequestException(
+        `${pessoais.map(([nome]) => nome).join(' e ')} e filtro de agenda pessoal: ` +
+          'use GET /atendimentos/meus.',
+      );
+    }
   }
 
   private montarFiltro(filtro: FiltroAtendimentosDto): Record<string, unknown> {

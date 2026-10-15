@@ -6,7 +6,8 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { EventEmitter2 } from '@nestjs/event-emitter';
-import { InjectModel } from '@nestjs/sequelize';
+import { InjectConnection, InjectModel } from '@nestjs/sequelize';
+import { Sequelize } from 'sequelize-typescript';
 
 import { RespostaPaginada } from '../../common/dto/resposta-paginada.dto';
 import { PapelMonitoria } from '../../common/enums/papel-monitoria.enum';
@@ -37,6 +38,7 @@ export class ParticipantesService {
     private readonly inscricaoModel: typeof AtendimentoParticipante,
     private readonly participacaoService: ParticipacaoService,
     private readonly eventos: EventEmitter2,
+    @InjectConnection() private readonly sequelize: Sequelize,
   ) {}
 
   /**
@@ -75,6 +77,110 @@ export class ParticipantesService {
     );
 
     return vinculo;
+  }
+
+  /**
+   * A3 — promove um MONITORADO a MONITOR em uma unica transacao.
+   *
+   * Antes isto era `encerrar` + `POST /monitores`, com dois defeitos. O
+   * primeiro e que nao era atomico: falhando o segundo passo, o aluno ficava
+   * SEM VINCULO NENHUM na monitoria — pior que o estado inicial. O segundo e
+   * que `encerrarVinculo` recusa com 409 havendo inscricao ativa, o que
+   * impedia promover justamente quem estava participando.
+   *
+   * A RN09 e respeitada por construcao: dentro da transacao o vinculo antigo
+   * sai de ATIVO antes de o novo entrar, entao o indice `ux_participante_ativo`
+   * nunca ve os dois ao mesmo tempo.
+   */
+  async promoverAMonitor(
+    monitoria: Monitoria,
+    participanteId: string,
+    professor: UsuarioAutenticado,
+  ): Promise<ParticipanteRespostaDto> {
+    const participante = await this.participacaoService.buscarParticipantePorIdOuFalhar(
+      participanteId,
+      monitoria.id,
+    );
+
+    if (participante.papel === PapelMonitoria.MONITOR) {
+      throw new ConflictException('Este participante ja e MONITOR nesta monitoria.');
+    }
+
+    if (participante.status !== StatusParticipacao.ATIVO) {
+      throw new ConflictException(
+        'Apenas um vinculo ATIVO pode ser promovido. Inscreva o aluno novamente.',
+      );
+    }
+
+    if (
+      monitoria.status === StatusMonitoria.ENCERRADA ||
+      monitoria.status === StatusMonitoria.CANCELADA
+    ) {
+      throw new ConflictException(
+        `Monitoria ${monitoria.status.toLowerCase()} nao aceita mudanca de participantes.`,
+      );
+    }
+
+    const { novoVinculo, inscricoesCanceladas } = await this.sequelize.transaction(
+      async (transaction) => {
+        /**
+         * As inscricoes dele como MONITORADO sao canceladas.
+         *
+         * Mante-las deixaria a pessoa inscrita como aluna em sessoes da
+         * monitoria onde agora e monitora — e, pior, fora do alcance das
+         * constraints: `ex_aluno_sem_conflito` chaveia por `participante_id`, e
+         * o novo vinculo tem outro id, entao a agenda dela deixaria de ser
+         * protegida contra sobreposicao entre os dois papeis.
+         *
+         * O historico fica (RN10): a linha continua, com status CANCELADA.
+         */
+        const [inscricoesCanceladas] = await this.inscricaoModel.update(
+          { status: StatusInscricao.CANCELADA },
+          {
+            where: { participanteId: participante.id, status: StatusInscricao.INSCRITO },
+            transaction,
+          },
+        );
+
+        await participante.update(
+          { status: StatusParticipacao.ENCERRADO, encerradoEm: new Date() },
+          { transaction },
+        );
+
+        const novoVinculo = await this.participanteModel.create(
+          {
+            monitoriaId: monitoria.id,
+            alunoId: participante.alunoId,
+            papel: PapelMonitoria.MONITOR,
+            status: StatusParticipacao.ATIVO,
+            ingressouEm: new Date(),
+            habilitadoPorUsuarioId: professor.id,
+          },
+          { transaction },
+        );
+
+        return { novoVinculo, inscricoesCanceladas };
+      },
+    );
+
+    /**
+     * UM aviso, referente ao vinculo NOVO, mencionando o que foi cancelado.
+     *
+     * Dois e-mails ("voce virou monitor" e "sua inscricao foi cancelada")
+     * chegariam fora de ordem e pareceriam contraditorios. Um so explica a
+     * causa junto com o efeito.
+     */
+    this.eventos.emit(
+      EVENTO_MONITOR_HABILITADO,
+      new MonitorHabilitadoEvento(
+        novoVinculo.id,
+        monitoria.id,
+        participante.alunoId,
+        inscricoesCanceladas,
+      ),
+    );
+
+    return this.detalhar(novoVinculo.id);
   }
 
   /**
