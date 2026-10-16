@@ -1,5 +1,6 @@
 import { ConflictException, Injectable, NotFoundException } from '@nestjs/common';
-import { InjectModel } from '@nestjs/sequelize';
+import { InjectConnection, InjectModel } from '@nestjs/sequelize';
+import { Sequelize } from 'sequelize-typescript';
 import { Op, UniqueConstraintError } from 'sequelize';
 
 import { RespostaPaginada } from '../../common/dto/resposta-paginada.dto';
@@ -8,7 +9,10 @@ import { CriarDisciplinaDto } from './dto/criar-disciplina.dto';
 import { DisciplinaRespostaDto } from './dto/disciplina-resposta.dto';
 import { FiltroDisciplinasDto } from './dto/filtro-disciplinas.dto';
 import { Disciplina } from './entities/disciplina.model';
-import { prefixoDoNome, proximoCodigo } from './gerador-de-codigo';
+import { DisciplinaCurso } from './entities/disciplina-curso.model';
+import { Curso } from '../cursos/entities/curso.model';
+import { CursosService } from '../cursos/cursos.service';
+import { prefixoDoNome, proximoCodigo } from '../../common/gerador-de-codigo';
 
 /**
  * Tentativas de gerar um codigo livre.
@@ -22,7 +26,13 @@ const MAX_TENTATIVAS_DE_CODIGO = 3;
 
 @Injectable()
 export class DisciplinasService {
-  constructor(@InjectModel(Disciplina) private readonly disciplinaModel: typeof Disciplina) {}
+  constructor(
+    @InjectModel(Disciplina) private readonly disciplinaModel: typeof Disciplina,
+    @InjectModel(DisciplinaCurso)
+    private readonly disciplinaCursoModel: typeof DisciplinaCurso,
+    @InjectConnection() private readonly sequelize: Sequelize,
+    private readonly cursosService: CursosService,
+  ) {}
 
   /**
    * O codigo e gerado aqui, nunca recebido.
@@ -34,6 +44,19 @@ export class DisciplinasService {
    * enxerga a linha que ganhou a corrida.
    */
   async criar(dto: CriarDisciplinaDto): Promise<DisciplinaRespostaDto> {
+    /**
+     * Os cursos sao validados antes de qualquer tentativa de insercao.
+     *
+     * Sem isto, um id inexistente so apareceria como violacao de FK traduzida
+     * genericamente, e um curso INATIVO passaria — criando disciplina nova em
+     * um curso que a instituicao ja tirou de circulacao.
+     */
+    const cursosIds = [...new Set(dto.cursosIds)];
+
+    for (const cursoId of cursosIds) {
+      await this.cursosService.exigirAtivo(cursoId);
+    }
+
     const prefixo = prefixoDoNome(dto.nome);
 
     for (let tentativa = 1; tentativa <= MAX_TENTATIVAS_DE_CODIGO; tentativa += 1) {
@@ -49,7 +72,27 @@ export class DisciplinasService {
       );
 
       try {
-        const disciplina = await this.disciplinaModel.create({ codigo, nome: dto.nome });
+        const disciplina = await this.sequelize.transaction(async (transaction) => {
+          const criada = await this.disciplinaModel.create(
+            { codigo, nome: dto.nome },
+            { transaction },
+          );
+
+          await this.disciplinaCursoModel.bulkCreate(
+            cursosIds.map((cursoId) => ({ disciplinaId: criada.id, cursoId })),
+            { transaction },
+          );
+
+          return criada;
+        });
+
+        /**
+         * Recarrega com os cursos: a instancia recem-criada nao traz a
+         * associacao, e sem ela a resposta sairia com `cursos: []` logo apos o
+         * cadastro.
+         */
+        await disciplina.reload({ include: [Curso] });
+
         return DisciplinaRespostaDto.deModelo(disciplina);
       } catch (erro) {
         // So a colisao de codigo justifica nova tentativa. Qualquer outro erro
@@ -63,6 +106,48 @@ export class DisciplinasService {
     throw new ConflictException(
       'Nao foi possivel gerar um codigo livre para a disciplina. Tente novamente.',
     );
+  }
+
+  /**
+   * Troca o conjunto de cursos da disciplina.
+   *
+   * Em uma transacao: valida os novos, apaga as associacoes que sairam e insere
+   * as que entraram. Remover um curso com participante dele na disciplina e
+   * recusado pelo banco — a FK composta de `monitoria_participantes` aponta
+   * para esta associacao, e apagar a linha deixaria vinculos sem respaldo da
+   * regra. O erro sobe traduzido pelo filtro global.
+   */
+  private async substituirCursos(disciplinaId: string, cursosIds: string[]): Promise<void> {
+    const desejados = [...new Set(cursosIds)];
+
+    for (const cursoId of desejados) {
+      await this.cursosService.exigirAtivo(cursoId);
+    }
+
+    await this.sequelize.transaction(async (transaction) => {
+      const atuais = await this.disciplinaCursoModel.findAll({
+        where: { disciplinaId },
+        transaction,
+      });
+
+      const atuaisIds = atuais.map((linha) => linha.cursoId);
+      const remover = atuaisIds.filter((id) => !desejados.includes(id));
+      const inserir = desejados.filter((id) => !atuaisIds.includes(id));
+
+      if (remover.length > 0) {
+        await this.disciplinaCursoModel.destroy({
+          where: { disciplinaId, cursoId: { [Op.in]: remover } },
+          transaction,
+        });
+      }
+
+      if (inserir.length > 0) {
+        await this.disciplinaCursoModel.bulkCreate(
+          inserir.map((cursoId) => ({ disciplinaId, cursoId })),
+          { transaction },
+        );
+      }
+    });
   }
 
   async listar(filtro: FiltroDisciplinasDto): Promise<RespostaPaginada<DisciplinaRespostaDto>> {
@@ -79,7 +164,28 @@ export class DisciplinasService {
       ];
     }
 
+    if (filtro.cursoId) {
+      /**
+       * Subconsulta, e NAO `where` dentro do include.
+       *
+       * Filtrar pelo include transformaria o join em INNER e, de quebra, faria
+       * cada disciplina voltar apenas com o curso filtrado — a resposta
+       * afirmaria que Banco de Dados so pertence a Sistemas de Informacao,
+       * escondendo Engenharia da Computacao. A subconsulta restringe QUAIS
+       * disciplinas aparecem sem mexer no que cada uma traz.
+       */
+      where.id = {
+        [Op.in]: this.sequelize.literal(
+          '(SELECT disciplina_id FROM disciplina_cursos WHERE curso_id = :cursoFiltrado)',
+        ),
+      };
+    }
+
     const { rows, count } = await this.disciplinaModel.findAndCountAll({
+      // Cursos junto: a resposta os expoe, e sem o include viriam vazios.
+      include: [Curso],
+      distinct: true,
+      replacements: { cursoFiltrado: filtro.cursoId ?? null },
       where,
       order: [['nome', 'ASC']],
       limit: filtro.limite,
@@ -95,7 +201,7 @@ export class DisciplinasService {
   }
 
   async buscarOuFalhar(id: string): Promise<Disciplina> {
-    const disciplina = await this.disciplinaModel.findByPk(id);
+    const disciplina = await this.disciplinaModel.findByPk(id, { include: [Curso] });
 
     if (!disciplina) {
       throw new NotFoundException('Disciplina nao encontrada.');
@@ -116,6 +222,17 @@ export class DisciplinasService {
       ...(dto.nome !== undefined ? { nome: dto.nome } : {}),
       ...(dto.ativa !== undefined ? { ativa: dto.ativa } : {}),
     });
+
+    if (dto.cursosIds) {
+      await this.substituirCursos(disciplina.id, dto.cursosIds);
+
+      /**
+       * Recarrega apos trocar a associacao: a instancia em memoria ainda traz
+       * os cursos ANTIGOS, e devolve-la faria a resposta contradizer o que
+       * acabou de ser gravado.
+       */
+      await disciplina.reload({ include: [Curso] });
+    }
 
     return DisciplinaRespostaDto.deModelo(disciplina);
   }

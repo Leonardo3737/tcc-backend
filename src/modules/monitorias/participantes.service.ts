@@ -19,6 +19,7 @@ import { UsuarioAutenticado } from '../../common/types/usuario-autenticado';
 import { Atendimento } from '../atendimentos/entities/atendimento.model';
 import { AtendimentoParticipante } from '../atendimentos/entities/atendimento-participante.model';
 import { Aluno } from '../usuarios/entities/aluno.model';
+import { DisciplinaCurso } from '../disciplinas/entities/disciplina-curso.model';
 import { Usuario } from '../usuarios/entities/usuario.model';
 import { FiltroParticipantesDto } from './dto/filtro-participantes.dto';
 import { ParticipanteRespostaDto } from './dto/participante-resposta.dto';
@@ -33,6 +34,8 @@ export class ParticipantesService {
     @InjectModel(MonitoriaParticipante)
     private readonly participanteModel: typeof MonitoriaParticipante,
     @InjectModel(Aluno) private readonly alunoModel: typeof Aluno,
+    @InjectModel(DisciplinaCurso)
+    private readonly disciplinaCursoModel: typeof DisciplinaCurso,
     @InjectModel(Atendimento) private readonly atendimentoModel: typeof Atendimento,
     @InjectModel(AtendimentoParticipante)
     private readonly inscricaoModel: typeof AtendimentoParticipante,
@@ -155,6 +158,10 @@ export class ParticipantesService {
             status: StatusParticipacao.ATIVO,
             ingressouEm: new Date(),
             habilitadoPorUsuarioId: professor.id,
+            // Curso e disciplina ja eram compativeis no vinculo anterior;
+            // promover muda o papel, nao a elegibilidade.
+            cursoId: participante.cursoId,
+            disciplinaId: participante.disciplinaId,
           },
           { transaction },
         );
@@ -196,6 +203,31 @@ export class ParticipantesService {
     return this.criarVinculo(monitoria, alunoId, PapelMonitoria.MONITORADO, habilitadoPor);
   }
 
+  /**
+   * O curso do aluno precisa estar ENTRE os cursos da disciplina.
+   *
+   * Vale para os DOIS papeis: monitorar uma disciplina pressupoe te-la cursado.
+   * Como uma disciplina pode ser de varios cursos — Banco de Dados serve
+   * Sistemas de Informacao e Engenharia da Computacao —, a verificacao e de
+   * pertinencia, nao de igualdade.
+   *
+   * A garantia real e a FK composta (disciplina_id, curso_id) contra
+   * `disciplina_cursos`. Esta consulta existe para produzir uma mensagem que
+   * explique o motivo, em vez de um erro de constraint traduzido genericamente.
+   */
+  private async exigirCursoCompativel(aluno: Aluno, monitoria: Monitoria): Promise<void> {
+    const oferece = await this.disciplinaCursoModel.count({
+      where: { disciplinaId: monitoria.disciplinaId, cursoId: aluno.cursoId },
+    });
+
+    if (oferece === 0) {
+      throw new ConflictException(
+        'A disciplina desta monitoria nao e oferecida no curso deste aluno. ' +
+          'Um aluno so participa de monitorias de disciplinas do proprio curso.',
+      );
+    }
+  }
+
   private async criarVinculo(
     monitoria: Monitoria,
     alunoId: string,
@@ -234,6 +266,8 @@ export class ParticipantesService {
       );
     }
 
+    await this.exigirCursoCompativel(aluno, monitoria);
+
     const participante = await this.participanteModel.create({
       monitoriaId: monitoria.id,
       alunoId,
@@ -241,6 +275,10 @@ export class ParticipantesService {
       status: StatusParticipacao.ATIVO,
       ingressouEm: new Date(),
       habilitadoPorUsuarioId,
+      // Curso do ALUNO e disciplina da MONITORIA: e o par que a FK composta
+      // confere contra `disciplina_cursos`.
+      cursoId: aluno.cursoId,
+      disciplinaId: monitoria.disciplinaId,
     });
 
     return this.detalhar(participante.id);

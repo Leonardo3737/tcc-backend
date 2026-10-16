@@ -1,6 +1,6 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Transform } from 'class-transformer';
-import { IsEmail, IsOptional, IsString, Length, Matches, MaxLength } from 'class-validator';
+import { IsEmail, IsOptional, IsString, IsUUID, Length, Matches, MaxLength } from 'class-validator';
 
 /**
  * Campos comuns a criacao de qualquer usuario.
@@ -30,6 +30,14 @@ abstract class DadosBaseDoUsuario {
 }
 
 export class CriarAlunoPeloProfessorDto extends DadosBaseDoUsuario {
+  /**
+   * Curso do aluno. Obrigatorio — e o que decide de quais monitorias ele pode
+   * participar, e a coluna nao aceita nulo.
+   */
+  @ApiProperty({ format: 'uuid' })
+  @IsUUID('4', { message: 'cursoId deve ser um UUID valido' })
+  cursoId: string;
+
   @ApiProperty({ example: '2021001234' })
   @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value))
   @IsString({ message: 'matricula deve ser um texto' })
@@ -37,13 +45,6 @@ export class CriarAlunoPeloProfessorDto extends DadosBaseDoUsuario {
     message: 'matricula deve ter de 3 a 30 caracteres alfanumericos, ponto, hifen ou underscore',
   })
   matricula: string;
-
-  @ApiPropertyOptional({ example: 'Ciencia da Computacao' })
-  @IsOptional()
-  @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value))
-  @IsString({ message: 'curso deve ser um texto' })
-  @MaxLength(120, { message: 'curso deve ter no maximo 120 caracteres' })
-  curso?: string;
 }
 
 export class CriarProfessorPeloProfessorDto extends DadosBaseDoUsuario {

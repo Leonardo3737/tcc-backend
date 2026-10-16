@@ -14,7 +14,9 @@ import { AtendimentosModule } from './modules/atendimentos/atendimentos.module';
 import { AvaliacoesModule } from './modules/avaliacoes/avaliacoes.module';
 import { AuthModule } from './modules/auth/auth.module';
 import { ConfiguracaoModule } from './modules/configuracao/configuracao.module';
+import { CursosModule } from './modules/cursos/cursos.module';
 import { DisciplinasModule } from './modules/disciplinas/disciplinas.module';
+import { EditaisModule } from './modules/editais/editais.module';
 import { DisponibilidadesModule } from './modules/disponibilidades/disponibilidades.module';
 import { EmailModule } from './modules/email/email.module';
 import { GamificacaoModule } from './modules/gamificacao/gamificacao.module';
@@ -75,6 +77,7 @@ import { UsuariosModule } from './modules/usuarios/usuarios.module';
     ConfiguracaoModule,
     UsuariosModule,
     AuthModule,
+    CursosModule,
     DisciplinasModule,
     MonitoriasModule,
     DisponibilidadesModule,
@@ -84,6 +87,7 @@ import { UsuariosModule } from './modules/usuarios/usuarios.module';
     GamificacaoModule,
     AnalyticsModule,
     NotificacoesModule,
+    EditaisModule,
   ],
   providers: [
     // Registrado aqui para valer sobre TODA a aplicacao, inclusive erros

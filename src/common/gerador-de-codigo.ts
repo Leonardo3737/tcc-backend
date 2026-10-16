@@ -1,5 +1,9 @@
 /**
- * Geracao do codigo da disciplina.
+ * Geracao de codigo legivel para catalogos (disciplina e curso).
+ *
+ * Mora em `common/` porque serve mais de um modulo: disciplina e curso tem a
+ * mesma forma — nome livre, codigo gerado, imutavel — e duplicar a regra faria
+ * as duas divergirem na primeira correcao de normalizacao.
  *
  * O codigo deixou de ser digitado por quem cadastra: era campo livre, sujeito a
  * convencoes diferentes por professor ("MAT101", "mat-101", "CALCULO1") e a

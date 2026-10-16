@@ -345,17 +345,73 @@ async function main() {
     }),
   );
 
+  /**
+   * Aluno e disciplina passaram a pertencer a um CURSO, e so se encontram
+   * dentro dele. O fluxo cria o seu, para nao depender de dado preexistente.
+   */
+  const curso = await esperarSucesso(
+    'Professor cadastra o curso',
+    api('POST', '/cursos', {
+      token: professor.token,
+      corpo: { nome: `Ciencia da Computacao ${SUFIXO.slice(-4)}` },
+    }),
+  );
+
+  if (/^CIE\d{3,}$/.test(curso.codigo)) {
+    ok('Codigo do curso gerado a partir do nome', curso.codigo);
+  } else {
+    falhou('Codigo do curso fora do formato', curso.codigo);
+  }
+
+  const cursoVizinho = await esperarSucesso(
+    'Professor cadastra um segundo curso',
+    api('POST', '/cursos', {
+      token: professor.token,
+      corpo: { nome: `Medicina ${SUFIXO.slice(-4)}` },
+    }),
+  );
+
+  await esperarRecusa(
+    'Professor NAO pode escolher o codigo do curso (400)',
+    400,
+    api('POST', '/cursos', {
+      token: professor.token,
+      corpo: { nome: 'Codigo Escolhido', codigo: `MEU${SUFIXO.slice(-4)}` },
+    }),
+  );
+
   const monitora = await criarELogar('aluno', 'Ana Monitora', professor.token, {
     matricula: `M${SUFIXO}`,
-    curso: 'Ciencia da Computacao',
+    cursoId: curso.id,
   });
   const monitorado = await criarELogar('aluno', 'Bruno Aluno', professor.token, {
     matricula: `A${SUFIXO}`,
-    curso: 'Engenharia',
+    cursoId: curso.id,
   });
   const estranho = await criarELogar('aluno', 'Carla Externa', professor.token, {
     matricula: `X${SUFIXO}`,
+    cursoId: curso.id,
   });
+
+  /** Aluno de OUTRO curso, para provar que a regra barra a participacao. */
+  const deOutroCurso = await esperarSucesso(
+    'Professor cadastra aluno de outro curso',
+    api('POST', '/alunos', {
+      token: professor.token,
+      corpo: {
+        nome: 'Diego Medicina',
+        email: `diego.medicina.${SUFIXO}@ufx.edu.br`,
+        matricula: `D${SUFIXO}`,
+        cursoId: cursoVizinho.id,
+      },
+    }),
+  );
+
+  if (deOutroCurso.aluno.cursoId === cursoVizinho.id) {
+    ok('Aluno vinculado ao curso informado', deOutroCurso.aluno.curso);
+  } else {
+    falhou('cursoId do aluno nao bateu');
+  }
 
   /**
    * A regressao mais grave que o fechamento previne: um aluno capaz de criar
@@ -386,7 +442,10 @@ async function main() {
   secao('2. Professor cria a monitoria');
   const disciplina = await esperarSucesso(
     'Professor cadastra a disciplina (so o nome)',
-    api('POST', '/disciplinas', { token: professor.token, corpo: { nome: 'Calculo I' } }),
+    api('POST', '/disciplinas', {
+      token: professor.token,
+      corpo: { nome: 'Calculo I', cursosIds: [curso.id] },
+    }),
   );
 
   if (/^CAL\d{3,}$/.test(disciplina.codigo)) {
@@ -401,7 +460,10 @@ async function main() {
    */
   const homonima = await esperarSucesso(
     'Disciplina de nome identico tambem e aceita',
-    api('POST', '/disciplinas', { token: professor.token, corpo: { nome: 'Calculo I' } }),
+    api('POST', '/disciplinas', {
+      token: professor.token,
+      corpo: { nome: 'Calculo I', cursosIds: [curso.id] },
+    }),
   );
 
   if (homonima.codigo !== disciplina.codigo) {
@@ -415,14 +477,21 @@ async function main() {
     400,
     api('POST', '/disciplinas', {
       token: professor.token,
-      corpo: { codigo: `MEU${SUFIXO.slice(-4)}`, nome: 'Codigo Escolhido' },
+      corpo: {
+        codigo: `MEU${SUFIXO.slice(-4)}`,
+        nome: 'Codigo Escolhido',
+        cursosIds: [curso.id],
+      },
     }),
   );
 
   await esperarRecusa(
     'RN: aluno NAO pode cadastrar disciplina (403)',
     403,
-    api('POST', '/disciplinas', { token: monitorado.token, corpo: { nome: 'Invalida' } }),
+    api('POST', '/disciplinas', {
+      token: monitorado.token,
+      corpo: { nome: 'Invalida', cursosIds: [curso.id] },
+    }),
   );
 
   const monitoria = await esperarSucesso(
@@ -494,6 +563,102 @@ async function main() {
   await esperarSucesso(
     'Bruno se inscreve como MONITORADO (RN04)',
     api('POST', `/monitorias/${monitoria.id}/inscricao`, { token: monitorado.token }),
+  );
+
+  /**
+   * A regra nova: a disciplina pertence a um curso, e so alunos dele podem
+   * participar. Vale para os DOIS papeis — monitorar pressupoe ter cursado a
+   * disciplina no mesmo curso.
+   */
+  /**
+   * Uma disciplina pode servir VARIOS cursos: "Banco de Dados" e de Sistemas de
+   * Informacao e de Engenharia da Computacao. Uma monitoria so atende os dois.
+   */
+  const compartilhada = await esperarSucesso(
+    'Disciplina em DOIS cursos',
+    api('POST', '/disciplinas', {
+      token: professor.token,
+      corpo: {
+        nome: `Banco de Dados ${SUFIXO.slice(-4)}`,
+        cursosIds: [curso.id, cursoVizinho.id],
+      },
+    }),
+  );
+
+  if (compartilhada.cursos?.length === 2) {
+    ok('Disciplina aceita mais de um curso', compartilhada.cursos.map((c) => c.codigo).join(' + '));
+  } else {
+    falhou('Nao gravou os dois cursos', JSON.stringify(compartilhada.cursos));
+  }
+
+  await esperarRecusa(
+    'Disciplina sem nenhum curso e recusada (400)',
+    400,
+    api('POST', '/disciplinas', {
+      token: professor.token,
+      corpo: { nome: 'Sem curso nenhum', cursosIds: [] },
+    }),
+  );
+
+  const porCurso = await esperarSucesso(
+    'Filtro de disciplinas por curso',
+    api('GET', `/disciplinas?cursoId=${cursoVizinho.id}`, { token: professor.token }),
+  );
+
+  const achou = porCurso.dados.find((d) => d.id === compartilhada.id);
+
+  if (achou) {
+    ok('A compartilhada aparece no filtro do segundo curso');
+  } else {
+    falhou('Filtro por curso nao encontrou a disciplina compartilhada');
+  }
+
+  /**
+   * O ponto fino do filtro: ele restringe QUAIS disciplinas aparecem, nao o
+   * conteudo de cada uma. Se viesse so o curso filtrado, a resposta afirmaria
+   * que a disciplina pertence a um curso so.
+   */
+  if (achou && achou.cursos.length === 2) {
+    ok('Filtrar por um curso nao esconde os outros cursos da disciplina');
+  } else {
+    falhou('O filtro truncou a lista de cursos', JSON.stringify(achou?.cursos));
+  }
+
+  if (!porCurso.dados.some((d) => d.id === disciplina.id)) {
+    ok('Disciplina de outro curso fica de fora do filtro');
+  } else {
+    falhou('Filtro trouxe disciplina de curso nao pedido');
+  }
+
+  const alunosDoCurso = await esperarSucesso(
+    'Filtro de alunos por curso',
+    api('GET', `/alunos?cursoId=${cursoVizinho.id}`, { token: professor.token }),
+  );
+
+  const soDoCurso = alunosDoCurso.dados.every((a) => a.aluno.cursoId === cursoVizinho.id);
+
+  if (soDoCurso && alunosDoCurso.dados.some((a) => a.id === deOutroCurso.id)) {
+    ok('Lista traz apenas alunos do curso pedido', `${alunosDoCurso.meta.total} aluno(s)`);
+  } else {
+    falhou('Filtro de alunos por curso incorreto');
+  }
+
+  await esperarRecusa(
+    'REGRA DE CURSO: aluno de outro curso nao e inscrito como MONITORADO (409)',
+    409,
+    api('POST', `/monitorias/${monitoria.id}/monitorados`, {
+      token: professor.token,
+      corpo: { alunoId: deOutroCurso.id },
+    }),
+  );
+
+  await esperarRecusa(
+    'REGRA DE CURSO: aluno de outro curso nao e habilitado como MONITOR (409)',
+    409,
+    api('POST', `/monitorias/${monitoria.id}/monitores`, {
+      token: professor.token,
+      corpo: { alunoId: deOutroCurso.id },
+    }),
   );
 
   await esperarRecusa(
@@ -1199,6 +1364,7 @@ async function main() {
   await verificarNotificacoes({ monitora, monitorado, monitoria });
   await verificarLogs({ professor, monitorado });
   await verificarAjustesDeApi({ professor, monitora, monitorado, monitoria, vinculoMonitora });
+  await verificarEditais({ professor, monitorado, curso, cursoVizinho, disciplina });
 
   console.log(
     `\n${falhas === 0 ? verde('TODOS OS PASSOS PASSARAM') : vermelho(`${falhas} FALHA(S)`)}` +
@@ -1722,6 +1888,974 @@ async function verificarAjustesDeApi({ professor, monitora, monitorado, monitori
     ok('A4: so REALIZADOS aparecem como pendentes de avaliacao', `${pendentes.dados.length}`);
   } else {
     falhou('A4: trouxe atendimento nao REALIZADO');
+  }
+}
+
+/**
+ * Editais de selecao de monitores — fase 4.
+ *
+ * E a primeira parte do sistema com escrita PUBLICA, e por isso a secao gasta
+ * mais linhas em recusas do que em caminho feliz: o que precisa ser provado nao
+ * e que a inscricao funciona, e que ela nao abre porta para nada alem dela
+ * mesma. Em particular: nao cria conta, nao aceita media do cliente, nao
+ * expoe dado de candidato sem token e nao aceita arquivo que nao seja PDF.
+ *
+ * O teto de requisicoes da rota publica e de 20/min por IP, e esta secao gasta
+ * cerca de 15. Rodar o fluxo duas vezes no mesmo minuto estoura o limite e as
+ * falhas aparecem como 429 — nao e regressao.
+ */
+async function verificarEditais({ professor, monitorado, curso, cursoVizinho, disciplina }) {
+  secao('14. Editais e inscricoes de candidatos');
+
+  const hoje = await dataLocalDaInstituicao();
+  const ontem = somarDias(hoje, -1);
+  const amanha = somarDias(hoje, 1);
+  const daquiUmMes = somarDias(hoje, 30);
+
+  /** ------------------------------------------------- gestao pelo professor */
+
+  const edital = await esperarSucesso(
+    'Professor cria o edital',
+    api('POST', '/editais', {
+      token: professor.token,
+      corpo: {
+        inicioInscricoes: ontem,
+        fimInscricoes: daquiUmMes,
+        link: 'https://ufx.edu.br/editais/monitoria-2026-2.pdf',
+        ano: 2026,
+        semestre: 2,
+      },
+    }),
+  );
+
+  if (edital.aceitandoInscricoes === true && edital.ativo === true) {
+    ok('Edital nasce ativo e aceitando inscricoes', `${edital.inicioInscricoes} a ${edital.fimInscricoes}`);
+  } else {
+    falhou('Edital criado em estado inesperado', JSON.stringify(edital));
+  }
+
+  const editalFuturo = await esperarSucesso(
+    'Professor cria um edital que ainda nao abriu',
+    api('POST', '/editais', {
+      token: professor.token,
+      corpo: {
+        inicioInscricoes: amanha,
+        fimInscricoes: daquiUmMes,
+        link: 'https://ufx.edu.br/editais/monitoria-2027-1.pdf',
+        ano: 2027,
+        semestre: 1,
+      },
+    }),
+  );
+
+  if (editalFuturo.aceitandoInscricoes === false) {
+    ok('Edital fora do periodo nao aceita inscricoes', editalFuturo.inicioInscricoes);
+  } else {
+    falhou('Edital futuro marcado como aberto');
+  }
+
+  await esperarRecusa(
+    'Periodo invertido e recusado (409)',
+    409,
+    api('POST', '/editais', {
+      token: professor.token,
+      corpo: {
+        inicioInscricoes: daquiUmMes,
+        fimInscricoes: ontem,
+        link: 'https://ufx.edu.br/editais/invalido.pdf',
+        ano: 2026,
+        semestre: 1,
+      },
+    }),
+  );
+
+  await esperarRecusa(
+    'Link sem protocolo e recusado (400)',
+    400,
+    api('POST', '/editais', {
+      token: professor.token,
+      corpo: {
+        inicioInscricoes: ontem,
+        fimInscricoes: daquiUmMes,
+        link: 'ufx.edu.br/edital.pdf',
+        ano: 2026,
+        semestre: 1,
+      },
+    }),
+  );
+
+  await esperarRecusa(
+    'Semestre 3 e recusado (400)',
+    400,
+    api('POST', '/editais', {
+      token: professor.token,
+      corpo: {
+        inicioInscricoes: ontem,
+        fimInscricoes: daquiUmMes,
+        link: 'https://ufx.edu.br/e.pdf',
+        ano: 2026,
+        semestre: 3,
+      },
+    }),
+  );
+
+  await esperarRecusa(
+    'ALUNO nao pode criar edital (403)',
+    403,
+    api('POST', '/editais', {
+      token: monitorado.token,
+      corpo: {
+        inicioInscricoes: ontem,
+        fimInscricoes: daquiUmMes,
+        link: 'https://ufx.edu.br/e.pdf',
+        ano: 2026,
+        semestre: 1,
+      },
+    }),
+  );
+
+  await esperarRecusa(
+    'Sem token nao se cria edital (401)',
+    401,
+    api('POST', '/editais', {
+      corpo: {
+        inicioInscricoes: ontem,
+        fimInscricoes: daquiUmMes,
+        link: 'https://ufx.edu.br/e.pdf',
+        ano: 2026,
+        semestre: 1,
+      },
+    }),
+  );
+
+  await esperarRecusa(
+    'ALUNO nao lista editais pela rota administrativa (403)',
+    403,
+    api('GET', '/editais', { token: monitorado.token }),
+  );
+
+  const editalEditado = await esperarSucesso(
+    'Professor corrige somente a data de fim',
+    api('PATCH', `/editais/${edital.id}`, {
+      token: professor.token,
+      corpo: { fimInscricoes: somarDias(hoje, 45) },
+    }),
+  );
+
+  if (editalEditado.inicioInscricoes === edital.inicioInscricoes) {
+    ok('Editar o fim preserva o inicio', editalEditado.fimInscricoes);
+  } else {
+    falhou('A data de inicio mudou sozinha');
+  }
+
+  await esperarRecusa(
+    'Editar so o fim para antes do inicio gravado e recusado (409)',
+    409,
+    api('PATCH', `/editais/${edital.id}`, {
+      token: professor.token,
+      corpo: { fimInscricoes: somarDias(hoje, -10) },
+    }),
+  );
+
+  /** ------------------------------------------------------- vitrine publica */
+
+  const abertos = await esperarSucesso(
+    'GET /editais/abertos SEM token',
+    api('GET', '/editais/abertos?limite=100'),
+  );
+
+  const ids = abertos.dados.map((e) => e.id);
+
+  if (ids.includes(edital.id) && !ids.includes(editalFuturo.id)) {
+    ok('A vitrine traz o aberto e omite o que ainda nao comecou', `${abertos.meta.total} aberto(s)`);
+  } else {
+    falhou('Vitrine publica com conteudo errado', JSON.stringify(ids));
+  }
+
+  const camposPublicos = Object.keys(abertos.dados[0] ?? {});
+
+  if (!camposPublicos.includes('ativo') && !camposPublicos.includes('criadoEm')) {
+    ok('A vitrine nao expoe `ativo` nem timestamps', camposPublicos.join(', '));
+  } else {
+    falhou('Campo administrativo vazou na rota publica', camposPublicos.join(', '));
+  }
+
+  /** O formulario publico precisa montar as listas sem token. */
+  await esperarSucesso('GET /cursos SEM token (formulario de edital)', api('GET', '/cursos'));
+  await esperarSucesso(
+    'GET /disciplinas?cursoId SEM token',
+    api('GET', `/disciplinas?cursoId=${curso.id}`),
+  );
+
+  const professoresPublicos = await esperarSucesso(
+    'GET /professores/publicos SEM token',
+    api('GET', '/professores/publicos?limite=100'),
+  );
+
+  const vazouEmail = professoresPublicos.dados.some(
+    (p) => 'email' in p || 'identificacaoFuncional' in p,
+  );
+
+  if (!vazouEmail && professoresPublicos.dados.every((p) => p.usuarioId && p.nome)) {
+    ok('Listagem publica de professores sem e-mail', `${professoresPublicos.meta.total} docente(s)`);
+  } else {
+    falhou('Dado pessoal vazou na listagem publica de professores');
+  }
+
+  await esperarRecusa(
+    'GET /professores (completo) continua exigindo token (401)',
+    401,
+    api('GET', '/professores'),
+  );
+
+  /** ------------------------------------------------- inscricao publica */
+
+  const rota = `/editais/${edital.id}/inscricoes`;
+  const matriculaCandidato = `C1${SUFIXO}`;
+  const emailCandidato = `candidato.um.${SUFIXO}@ufx.edu.br`;
+
+  const base = {
+    cursoId: curso.id,
+    disciplinaId: disciplina.id,
+    professorId: professor.id,
+    turno: 'NOTURNO',
+  };
+
+  const inscricao = await esperarSucesso(
+    'Candidato se inscreve SEM autenticacao',
+    apiArquivo('POST', rota, {
+      campos: {
+        ...base,
+        nomeCompleto: 'Candidato Um da Silva',
+        matricula: matriculaCandidato,
+        email: emailCandidato,
+        n1: '8.5',
+        n2: '9.25',
+      },
+    }),
+  );
+
+  const camposDaConfirmacao = Object.keys(inscricao);
+
+  if (
+    inscricao.id &&
+    !camposDaConfirmacao.includes('n1') &&
+    !camposDaConfirmacao.includes('media') &&
+    !camposDaConfirmacao.includes('boletim')
+  ) {
+    ok('A confirmacao publica devolve o minimo', camposDaConfirmacao.join(', '));
+  } else {
+    falhou('A confirmacao publica expoe mais do que deveria', camposDaConfirmacao.join(', '));
+  }
+
+  await esperarRecusa(
+    'Enviar `media` na requisicao e recusado (400)',
+    400,
+    apiArquivo('POST', rota, {
+      campos: {
+        ...base,
+        nomeCompleto: 'Candidato Media Forjada',
+        matricula: `C2${SUFIXO}`,
+        email: `media.${SUFIXO}@ufx.edu.br`,
+        n1: '1',
+        n2: '1',
+        media: '10',
+      },
+    }),
+  );
+
+  await esperarRecusa(
+    'Nota acima de 10 e recusada (400)',
+    400,
+    apiArquivo('POST', rota, {
+      campos: {
+        ...base,
+        nomeCompleto: 'Candidato Nota Alta',
+        matricula: `C3${SUFIXO}`,
+        email: `alta.${SUFIXO}@ufx.edu.br`,
+        n1: '10.5',
+      },
+    }),
+  );
+
+  await esperarRecusa(
+    'Nota com 3 casas decimais e recusada (400)',
+    400,
+    apiArquivo('POST', rota, {
+      campos: {
+        ...base,
+        nomeCompleto: 'Candidato Tres Casas',
+        matricula: `C4${SUFIXO}`,
+        email: `casas.${SUFIXO}@ufx.edu.br`,
+        n1: '8.333',
+      },
+    }),
+  );
+
+  await esperarRecusa(
+    'Disciplina que o curso nao oferece e recusada (409)',
+    409,
+    apiArquivo('POST', rota, {
+      campos: {
+        ...base,
+        cursoId: cursoVizinho.id,
+        nomeCompleto: 'Candidato Curso Errado',
+        matricula: `C5${SUFIXO}`,
+        email: `curso.${SUFIXO}@ufx.edu.br`,
+      },
+    }),
+  );
+
+  await esperarRecusa(
+    'Professor responsavel inexistente e recusado (404)',
+    404,
+    apiArquivo('POST', rota, {
+      campos: {
+        ...base,
+        professorId: '00000000-0000-4000-8000-000000000000',
+        nomeCompleto: 'Candidato Sem Orientador',
+        matricula: `C6${SUFIXO}`,
+        email: `orientador.${SUFIXO}@ufx.edu.br`,
+      },
+    }),
+  );
+
+  await esperarRecusa(
+    'Inscricao em edital que ainda nao abriu e recusada (409)',
+    409,
+    apiArquivo('POST', `/editais/${editalFuturo.id}/inscricoes`, {
+      campos: {
+        ...base,
+        nomeCompleto: 'Candidato Antecipado',
+        matricula: `C7${SUFIXO}`,
+        email: `antecipado.${SUFIXO}@ufx.edu.br`,
+      },
+    }),
+  );
+
+  await esperarRecusa(
+    'Mesma matricula no mesmo edital e recusada (409)',
+    409,
+    apiArquivo('POST', rota, {
+      campos: {
+        ...base,
+        nomeCompleto: 'Candidato Repetido',
+        matricula: matriculaCandidato,
+        email: `outro.${SUFIXO}@ufx.edu.br`,
+      },
+    }),
+  );
+
+  await esperarRecusa(
+    'Mesmo e-mail no mesmo edital e recusado (409)',
+    409,
+    apiArquivo('POST', rota, {
+      campos: {
+        ...base,
+        nomeCompleto: 'Candidato Repetido Dois',
+        matricula: `C8${SUFIXO}`,
+        email: emailCandidato,
+      },
+    }),
+  );
+
+  await esperarRecusa(
+    'Inscricao sem o boletim e recusada (400)',
+    400,
+    apiArquivo('POST', rota, {
+      semArquivo: true,
+      campos: {
+        ...base,
+        nomeCompleto: 'Candidato Sem Boletim',
+        matricula: `C9${SUFIXO}`,
+        email: `semboletim.${SUFIXO}@ufx.edu.br`,
+      },
+    }),
+  );
+
+  await esperarRecusa(
+    'Arquivo declarado como PDF mas sem a assinatura e recusado (400)',
+    400,
+    apiArquivo('POST', rota, {
+      conteudo: Buffer.from('MZ este nao e um PDF'),
+      campos: {
+        ...base,
+        nomeCompleto: 'Candidato Executavel',
+        matricula: `CA${SUFIXO}`,
+        email: `exe.${SUFIXO}@ufx.edu.br`,
+      },
+    }),
+  );
+
+  await esperarRecusa(
+    'Arquivo com tipo diferente de application/pdf e recusado (400)',
+    400,
+    apiArquivo('POST', rota, {
+      tipo: 'image/png',
+      campos: {
+        ...base,
+        nomeCompleto: 'Candidato Imagem',
+        matricula: `CB${SUFIXO}`,
+        email: `png.${SUFIXO}@ufx.edu.br`,
+      },
+    }),
+  );
+
+  /**
+   * Inscricao de quem JA e aluno cadastrado, com a matricula dele.
+   *
+   * Nenhum dado e reaproveitado automaticamente — o candidato digita tudo —, e
+   * o cruzamento aparece em `alunoCadastrado` na consulta do professor. E o que
+   * permite ao professor saber de quem ele nao precisa criar conta ao aprovar.
+   */
+  const matriculaDoAluno = await matriculaDe(monitorado.id);
+
+  const inscricaoDeAluno = await esperarSucesso(
+    'Aluno JA cadastrado tambem se inscreve (sem token)',
+    apiArquivo('POST', rota, {
+      campos: {
+        ...base,
+        nomeCompleto: 'Carlos Monitorado Pereira',
+        matricula: matriculaDoAluno,
+        email: `jacadastrado.${SUFIXO}@ufx.edu.br`,
+        n1: '7',
+        n2: '6',
+      },
+    }),
+  );
+
+  /** Sem nota nenhuma: a media tem de ficar NULA, nunca zero. */
+  const inscricaoSemNotas = await esperarSucesso(
+    'Inscricao sem informar nota nenhuma',
+    apiArquivo('POST', rota, {
+      campos: {
+        ...base,
+        turno: 'MATUTINO',
+        nomeCompleto: 'Candidato Sem Notas',
+        matricula: `CC${SUFIXO}`,
+        email: `semnotas.${SUFIXO}@ufx.edu.br`,
+        n1: '',
+        n2: '',
+      },
+    }),
+  );
+
+  /** ----------------------------------------- nada foi criado em alunos/usuarios */
+
+  const vazamento = await contarIdentidades(emailCandidato, matriculaCandidato);
+
+  if (vazamento.usuarios === 0 && vazamento.alunos === 0) {
+    ok('A inscricao NAO criou linha em `usuarios` nem em `alunos`');
+  } else {
+    falhou('A inscricao criou identidade', JSON.stringify(vazamento));
+  }
+
+  /** ------------------------------------------------ consulta administrativa */
+
+  await esperarRecusa('Listar inscricoes sem token (401)', 401, api('GET', '/inscricoes'));
+  await esperarRecusa(
+    'ALUNO nao lista inscricoes (403)',
+    403,
+    api('GET', '/inscricoes', { token: monitorado.token }),
+  );
+
+  const lista = await esperarSucesso(
+    'Professor lista as inscricoes do edital',
+    api('GET', `/inscricoes?editalId=${edital.id}&limite=100`, { token: professor.token }),
+  );
+
+  if (lista.meta.total === 3) {
+    ok('As 3 inscricoes validas estao na lista');
+  } else {
+    falhou(`Esperava 3 inscricoes, veio ${lista.meta.total}`);
+  }
+
+  const principal = lista.dados.find((i) => i.id === inscricao.id);
+
+  if (principal?.media === 8.88) {
+    ok('Media calculada pelo banco', `(8.5 + 9.25) / 2 = ${principal.media}`);
+  } else {
+    falhou('Media fora do esperado (8.88)', String(principal?.media));
+  }
+
+  const semNotas = lista.dados.find((i) => i.id === inscricaoSemNotas.id);
+
+  if (semNotas?.n1 === null && semNotas?.media === null) {
+    ok('Nota ausente deixa a media NULA — nunca zero');
+  } else {
+    falhou('Nota ausente virou numero', JSON.stringify({ n1: semNotas?.n1, media: semNotas?.media }));
+  }
+
+  const doAluno = lista.dados.find((i) => i.id === inscricaoDeAluno.id);
+
+  if (doAluno?.alunoCadastrado?.usuarioId === monitorado.id) {
+    ok('Candidato que ja tem conta e reconhecido pela matricula');
+  } else {
+    falhou('alunoCadastrado nao resolveu', JSON.stringify(doAluno?.alunoCadastrado));
+  }
+
+  if (principal?.alunoCadastrado === null) {
+    ok('Candidato sem conta aparece com alunoCadastrado nulo');
+  } else {
+    falhou('Candidato de fora foi associado a um aluno', JSON.stringify(principal?.alunoCadastrado));
+  }
+
+  if (principal?.boletim?.tamanhoBytes > 0 && !('conteudo' in (principal?.boletim ?? {}))) {
+    ok('A listagem traz metadado do boletim, nunca os bytes', principal.boletim.nomeOriginal);
+  } else {
+    falhou('Boletim exposto de forma errada na listagem', JSON.stringify(principal?.boletim));
+  }
+
+  /** ---------------------------------------------- filtros e ordenacoes */
+
+  const porTurno = await esperarSucesso(
+    'Filtro por turno',
+    api('GET', `/inscricoes?editalId=${edital.id}&turno=MATUTINO`, { token: professor.token }),
+  );
+
+  if (porTurno.meta.total === 1 && porTurno.dados[0].turno === 'MATUTINO') {
+    ok('Filtro por turno recorta corretamente');
+  } else {
+    falhou(`Filtro por turno trouxe ${porTurno.meta.total} item(ns)`);
+  }
+
+  const porCurso = await esperarSucesso(
+    'Filtro por curso',
+    api('GET', `/inscricoes?cursoId=${curso.id}&editalId=${edital.id}`, { token: professor.token }),
+  );
+
+  const porCursoVizinho = await esperarSucesso(
+    'Filtro por curso que nao tem inscricao',
+    api('GET', `/inscricoes?cursoId=${cursoVizinho.id}&editalId=${edital.id}`, {
+      token: professor.token,
+    }),
+  );
+
+  if (porCurso.meta.total === 3 && porCursoVizinho.meta.total === 0) {
+    ok('Filtro por curso separa os conjuntos');
+  } else {
+    falhou(`Filtro por curso: ${porCurso.meta.total} e ${porCursoVizinho.meta.total}`);
+  }
+
+  const porDisciplina = await esperarSucesso(
+    'Filtro por disciplina',
+    api('GET', `/inscricoes?disciplinaId=${disciplina.id}&editalId=${edital.id}`, {
+      token: professor.token,
+    }),
+  );
+
+  if (porDisciplina.meta.total === 3) {
+    ok('Filtro por disciplina recorta corretamente');
+  } else {
+    falhou(`Filtro por disciplina trouxe ${porDisciplina.meta.total}`);
+  }
+
+  const porProfessor = await esperarSucesso(
+    'Filtro por professor responsavel',
+    api('GET', `/inscricoes?professorId=${professor.id}&editalId=${edital.id}`, {
+      token: professor.token,
+    }),
+  );
+
+  if (porProfessor.meta.total === 3) {
+    ok('Filtro por professor responsavel recorta corretamente');
+  } else {
+    falhou(`Filtro por professor trouxe ${porProfessor.meta.total}`);
+  }
+
+  const porBusca = await esperarSucesso(
+    'Busca por matricula',
+    api('GET', `/inscricoes?editalId=${edital.id}&busca=${matriculaCandidato}`, {
+      token: professor.token,
+    }),
+  );
+
+  if (porBusca.meta.total === 1 && porBusca.dados[0].id === inscricao.id) {
+    ok('Busca encontra por matricula');
+  } else {
+    falhou(`Busca por matricula trouxe ${porBusca.meta.total}`);
+  }
+
+  const porNome = await esperarSucesso(
+    'Busca por parte do nome',
+    api('GET', `/inscricoes?editalId=${edital.id}&busca=da Silva`, { token: professor.token }),
+  );
+
+  if (porNome.meta.total === 1) {
+    ok('Busca encontra por nome parcial');
+  } else {
+    falhou(`Busca por nome trouxe ${porNome.meta.total}`);
+  }
+
+  const porPeriodo = await esperarSucesso(
+    'Filtro por ano e semestre do edital',
+    api('GET', '/inscricoes?ano=2026&semestre=2&limite=100', { token: professor.token }),
+  );
+
+  const porPeriodoErrado = await esperarSucesso(
+    'Filtro por periodo sem inscricao',
+    api('GET', '/inscricoes?ano=2027&semestre=1', { token: professor.token }),
+  );
+
+  if (porPeriodo.meta.total >= 3 && porPeriodoErrado.meta.total === 0) {
+    ok('Filtro por periodo do edital funciona pelo JOIN');
+  } else {
+    falhou(`Periodo: ${porPeriodo.meta.total} e ${porPeriodoErrado.meta.total}`);
+  }
+
+  const desc = await esperarSucesso(
+    'Ordenacao por media decrescente',
+    api('GET', `/inscricoes?editalId=${edital.id}&ordenarPor=media&direcao=desc`, {
+      token: professor.token,
+    }),
+  );
+
+  const asc = await esperarSucesso(
+    'Ordenacao por media crescente',
+    api('GET', `/inscricoes?editalId=${edital.id}&ordenarPor=media&direcao=asc`, {
+      token: professor.token,
+    }),
+  );
+
+  const mediasDesc = desc.dados.map((i) => i.media);
+  const mediasAsc = asc.dados.map((i) => i.media);
+
+  if (JSON.stringify(mediasDesc) === JSON.stringify([8.88, 6.5, null])) {
+    ok('DESC: maior media primeiro, nota ausente no fim', JSON.stringify(mediasDesc));
+  } else {
+    falhou('Ordem decrescente inesperada', JSON.stringify(mediasDesc));
+  }
+
+  if (JSON.stringify(mediasAsc) === JSON.stringify([6.5, 8.88, null])) {
+    ok('ASC: menor media primeiro, nota ausente AINDA no fim', JSON.stringify(mediasAsc));
+  } else {
+    falhou('Ordem crescente inesperada', JSON.stringify(mediasAsc));
+  }
+
+  const porNomeOrdenado = await esperarSucesso(
+    'Ordenacao por nome do candidato',
+    api('GET', `/inscricoes?editalId=${edital.id}&ordenarPor=nome&direcao=asc`, {
+      token: professor.token,
+    }),
+  );
+
+  const nomes = porNomeOrdenado.dados.map((i) => i.nomeCompleto);
+
+  if (JSON.stringify(nomes) === JSON.stringify([...nomes].sort((a, b) => a.localeCompare(b, 'pt')))) {
+    ok('Ordenacao por nome em ordem alfabetica', nomes.join(' | '));
+  } else {
+    falhou('Ordem alfabetica incorreta', nomes.join(' | '));
+  }
+
+  await esperarRecusa(
+    'Campo de ordenacao fora da lista e recusado (400)',
+    400,
+    api('GET', `/inscricoes?ordenarPor=senha_hash`, { token: professor.token }),
+  );
+
+  await esperarRecusa(
+    'Limite acima de 100 e recusado (400)',
+    400,
+    api('GET', '/inscricoes?limite=1000', { token: professor.token }),
+  );
+
+  const pagina1 = await esperarSucesso(
+    'Paginacao: pagina 1 com limite 2',
+    api('GET', `/inscricoes?editalId=${edital.id}&limite=2&pagina=1&ordenarPor=matricula&direcao=asc`, {
+      token: professor.token,
+    }),
+  );
+
+  const pagina2 = await esperarSucesso(
+    'Paginacao: pagina 2 com limite 2',
+    api('GET', `/inscricoes?editalId=${edital.id}&limite=2&pagina=2&ordenarPor=matricula&direcao=asc`, {
+      token: professor.token,
+    }),
+  );
+
+  const repetida = pagina1.dados.some((a) => pagina2.dados.some((b) => a.id === b.id));
+
+  if (pagina1.dados.length === 2 && pagina2.dados.length === 1 && !repetida) {
+    ok('Paginacao no banco, sem item repetido entre paginas');
+  } else {
+    falhou('Paginacao inconsistente', `${pagina1.dados.length} + ${pagina2.dados.length}`);
+  }
+
+  /** ------------------------------------------------------------- detalhe */
+
+  const detalhe = await esperarSucesso(
+    'Professor detalha a inscricao',
+    api('GET', `/inscricoes/${inscricao.id}`, { token: professor.token }),
+  );
+
+  if (
+    detalhe.curso?.codigo === curso.codigo &&
+    detalhe.disciplina?.id === disciplina.id &&
+    detalhe.professor?.usuarioId === professor.id &&
+    detalhe.edital?.id === edital.id
+  ) {
+    ok('As quatro FKs voltam resolvidas no detalhe');
+  } else {
+    falhou('FK nao resolvida no detalhe', JSON.stringify(detalhe));
+  }
+
+  await esperarRecusa(
+    'ALUNO nao detalha inscricao de outro (403)',
+    403,
+    api('GET', `/inscricoes/${inscricao.id}`, { token: monitorado.token }),
+  );
+
+  /** ------------------------------------------------------- boletim em PDF */
+
+  await esperarRecusa(
+    'Baixar boletim sem token (401)',
+    401,
+    api('GET', `/inscricoes/${inscricao.id}/boletim`),
+  );
+
+  await esperarRecusa(
+    'ALUNO nao baixa boletim de candidato (403)',
+    403,
+    api('GET', `/inscricoes/${inscricao.id}/boletim`, { token: monitorado.token }),
+  );
+
+  const download = await fetch(`${BASE}/inscricoes/${inscricao.id}/boletim`, {
+    headers: { Authorization: `Bearer ${professor.token}` },
+  });
+
+  const bytes = Buffer.from(await download.arrayBuffer());
+  const disposicao = download.headers.get('content-disposition') ?? '';
+
+  if (
+    download.status === 200 &&
+    download.headers.get('content-type') === 'application/pdf' &&
+    disposicao.startsWith('attachment;') &&
+    bytes.subarray(0, 5).toString() === '%PDF-'
+  ) {
+    ok('Professor baixa o PDF como anexo', `${bytes.length} bytes | ${disposicao}`);
+  } else {
+    falhou(
+      'Download do boletim fora do esperado',
+      `HTTP ${download.status} | ${download.headers.get('content-type')} | ${disposicao}`,
+    );
+  }
+
+  if ((download.headers.get('cache-control') ?? '').includes('no-store')) {
+    ok('Boletim servido com no-store');
+  } else {
+    falhou('Boletim sem no-store', download.headers.get('cache-control'));
+  }
+
+  /** --------------------------------- a media e intocavel, inclusive por SQL */
+
+  const recusaDoBanco = await tentarSobrescreverMedia(inscricao.id);
+
+  if (recusaDoBanco) {
+    ok('O BANCO recusa UPDATE na media (coluna gerada)', recusaDoBanco.slice(0, 80));
+  } else {
+    falhou('O banco ACEITOU sobrescrever a media');
+  }
+
+  /** ----------------------------------------------- exclusao logica (RN10) */
+
+  await esperarSucesso(
+    'Professor exclui o edital (DELETE)',
+    api('DELETE', `/editais/${edital.id}`, { token: professor.token }),
+  );
+
+  const aindaExiste = await editalAindaNoBanco(edital.id);
+
+  if (aindaExiste && aindaExiste.ativo === false) {
+    ok('DELETE nao apagou a linha: apenas `ativo = false` (RN10)');
+  } else {
+    falhou('O edital foi removido do banco', JSON.stringify(aindaExiste));
+  }
+
+  const abertosDepois = await esperarSucesso(
+    'Vitrine publica apos a exclusao',
+    api('GET', '/editais/abertos?limite=100'),
+  );
+
+  if (!abertosDepois.dados.some((e) => e.id === edital.id)) {
+    ok('Edital excluido sai da vitrine publica');
+  } else {
+    falhou('Edital excluido continua na vitrine');
+  }
+
+  await esperarRecusa(
+    'Inscricao em edital excluido e recusada (404)',
+    404,
+    apiArquivo('POST', rota, {
+      campos: {
+        ...base,
+        nomeCompleto: 'Candidato Atrasado',
+        matricula: `CD${SUFIXO}`,
+        email: `atrasado.${SUFIXO}@ufx.edu.br`,
+      },
+    }),
+  );
+
+  const inscricoesDoExcluido = await esperarSucesso(
+    'As inscricoes do edital excluido continuam consultaveis',
+    api('GET', `/inscricoes?editalId=${edital.id}`, { token: professor.token }),
+  );
+
+  if (inscricoesDoExcluido.meta.total === 3) {
+    ok('Exclusao do edital nao apagou candidatura nenhuma (RN10)');
+  } else {
+    falhou(`Esperava 3 inscricoes preservadas, veio ${inscricoesDoExcluido.meta.total}`);
+  }
+
+  const reativado = await esperarSucesso(
+    'Professor reativa o edital por PATCH',
+    api('PATCH', `/editais/${edital.id}`, { token: professor.token, corpo: { ativo: true } }),
+  );
+
+  if (reativado.ativo === true && reativado.aceitandoInscricoes === true) {
+    ok('Reativacao devolve o edital a vitrine');
+  } else {
+    falhou('Reativacao nao surtiu efeito', JSON.stringify(reativado));
+  }
+
+  await esperarSucesso(
+    'Exclusao e idempotente (segundo DELETE)',
+    api('DELETE', `/editais/${edital.id}`, { token: professor.token }),
+  );
+  await esperarSucesso(
+    'Terceiro DELETE tambem devolve 204',
+    api('DELETE', `/editais/${edital.id}`, { token: professor.token }),
+  );
+}
+
+/** ----------------------------------------------------------- utilitarios */
+
+/**
+ * Multipart, montado com FormData nativo do Node.
+ *
+ * O Content-Type NAO e definido a mao de proposito: o `fetch` o escreve junto
+ * com o boundary, e um boundary errado derruba o parsing no multer antes de
+ * qualquer validacao da aplicacao.
+ */
+async function apiArquivo(metodo, caminho, { campos, token, conteudo, tipo, semArquivo } = {}) {
+  const form = new FormData();
+
+  for (const [chave, valor] of Object.entries(campos ?? {})) {
+    form.append(chave, String(valor));
+  }
+
+  if (!semArquivo) {
+    const bytes = conteudo ?? pdfDeTeste();
+
+    form.append(
+      'boletim',
+      new Blob([bytes], { type: tipo ?? 'application/pdf' }),
+      'boletim-notas.pdf',
+    );
+  }
+
+  const resposta = await fetch(`${BASE}${caminho}`, {
+    method: metodo,
+    headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+    body: form,
+  });
+
+  const texto = await resposta.text();
+  let dados = null;
+
+  try {
+    dados = texto ? JSON.parse(texto) : null;
+  } catch {
+    dados = texto;
+  }
+
+  return { status: resposta.status, dados };
+}
+
+/** PDF minimo, valido o bastante para a assinatura e para abrir em leitor. */
+function pdfDeTeste() {
+  return Buffer.from(
+    '%PDF-1.4\n1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj\n' +
+      '2 0 obj<</Type/Pages/Kids[]/Count 0>>endobj\n' +
+      'trailer<</Root 1 0 R>>\n%%EOF\n',
+    'latin1',
+  );
+}
+
+/** Hoje no fuso da instituicao, pedido ao PostgreSQL — como o backend faz. */
+async function dataLocalDaInstituicao() {
+  const cliente = await conectarAoBanco();
+
+  try {
+    const { rows } = await cliente.query('SELECT (now() AT TIME ZONE $1)::date::text AS hoje', [TZ]);
+    return rows[0].hoje;
+  } finally {
+    await cliente.end();
+  }
+}
+
+function somarDias(data, dias) {
+  const [ano, mes, dia] = data.split('-').map(Number);
+  const instante = new Date(Date.UTC(ano, mes - 1, dia));
+
+  instante.setUTCDate(instante.getUTCDate() + dias);
+  return instante.toISOString().slice(0, 10);
+}
+
+async function matriculaDe(usuarioId) {
+  const cliente = await conectarAoBanco();
+
+  try {
+    const { rows } = await cliente.query('SELECT matricula FROM alunos WHERE usuario_id = $1', [
+      usuarioId,
+    ]);
+    return rows[0].matricula;
+  } finally {
+    await cliente.end();
+  }
+}
+
+/** A prova de que a inscricao publica nao fabricou identidade. */
+async function contarIdentidades(email, matricula) {
+  const cliente = await conectarAoBanco();
+
+  try {
+    const usuarios = await cliente.query('SELECT 1 FROM usuarios WHERE email = $1', [email]);
+    const alunos = await cliente.query('SELECT 1 FROM alunos WHERE matricula = $1', [matricula]);
+
+    return { usuarios: usuarios.rowCount, alunos: alunos.rowCount };
+  } finally {
+    await cliente.end();
+  }
+}
+
+/**
+ * Tenta escrever na media por SQL direto.
+ *
+ * A validacao do DTO so cobre quem passa pela API. Esta tentativa e o que
+ * prova a afirmacao forte: a media nao e sobrescrevivel por NINGUEM, porque e
+ * coluna GENERATED ALWAYS no PostgreSQL.
+ */
+async function tentarSobrescreverMedia(inscricaoId) {
+  const cliente = await conectarAoBanco();
+
+  try {
+    await cliente.query('UPDATE inscricoes_edital SET media = 10 WHERE id = $1', [inscricaoId]);
+    return null;
+  } catch (erro) {
+    return erro.message;
+  } finally {
+    await cliente.end();
+  }
+}
+
+async function editalAindaNoBanco(editalId) {
+  const cliente = await conectarAoBanco();
+
+  try {
+    const { rows } = await cliente.query('SELECT ativo FROM editais WHERE id = $1', [editalId]);
+    return rows[0] ?? null;
+  } finally {
+    await cliente.end();
   }
 }
 

@@ -4,6 +4,7 @@ import { SequelizeModule } from '@nestjs/sequelize';
 import { Atendimento } from '../atendimentos/entities/atendimento.model';
 import { AtendimentoParticipante } from '../atendimentos/entities/atendimento-participante.model';
 import { DisciplinasModule } from '../disciplinas/disciplinas.module';
+import { DisciplinaCurso } from '../disciplinas/entities/disciplina-curso.model';
 import { Aluno } from '../usuarios/entities/aluno.model';
 import { Monitoria } from './entities/monitoria.model';
 import { MonitoriaParticipante } from './entities/monitoria-participante.model';
@@ -32,6 +33,12 @@ import { ParticipantesService } from './participantes.service';
       Aluno,
       Atendimento,
       AtendimentoParticipante,
+      /**
+       * Somente LEITURA: `ParticipantesService` consulta a associacao para
+       * dizer se o curso do aluno esta entre os da disciplina. E import de
+       * model, nao de modulo — nao cria ciclo com DisciplinasModule.
+       */
+      DisciplinaCurso,
     ]),
     DisciplinasModule,
   ],

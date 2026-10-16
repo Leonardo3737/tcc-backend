@@ -151,7 +151,7 @@ explicitamente do que descobrir em produção que `JWT_SECRET` estava vazio.
 npm run db:migrate
 ```
 
-São 20 migrations. Outros comandos: `db:migrate:status`, `db:migrate:undo`,
+São 22 migrations. Outros comandos: `db:migrate:status`, `db:migrate:undo`,
 `db:migrate:undo:all`.
 
 O schema é **propriedade das migrations**. `synchronize` está desligado e não
@@ -222,7 +222,7 @@ sem `Bearer`). O `persistAuthorization` mantém o token entre recarregamentos.
 npm run test
 ```
 
-298 testes de unidade, sem banco, cobrindo o que o PostgreSQL **não** alcança:
+380 testes de unidade, sem banco, cobrindo o que o PostgreSQL **não** alcança:
 autorização, papéis, transições de estado, propriedade de recurso, campos
 derivados e tradução de erro.
 
@@ -243,6 +243,7 @@ derivados e tradução de erro.
 | `disciplinas.spec.ts` | geração do código (prefixo, acentos, numeração, largura) e nova tentativa quando a constraint recusa |
 | `email.spec.ts` | modo log sem credencial, payload e cabeçalhos do Brevo, timeout, recusa do provedor e falha de rede sem lançar; corpo nunca no log |
 | `recuperacao-senha.spec.ts` | anti-enumeração (resposta e custo idênticos), teto de tentativas, expiração, uso único, código e senha só como hash |
+| `editais.spec.ts` | período de inscrições (incluindo PATCH parcial), exclusão lógica idempotente, validação do PDF por assinatura, `media` nunca enviada no INSERT, nota em branco que não vira zero, e-mail depois do commit cuja falha não desfaz nada, `NULLS LAST` nas duas direções e ausência do binário nas listagens |
 
 ### Verificação ponta a ponta
 
@@ -256,7 +257,7 @@ Com o banco semeado (`npm run db:seed`) e o servidor rodando em outro terminal:
 npm run test:fluxo
 ```
 
-**151 verificações**, todas passando contra PostgreSQL 17. O seeder passou a ser
+**260 verificações**, todas passando contra PostgreSQL 17. O seeder passou a ser
 pré-requisito: sem auto-cadastro, o script precisa de um professor que ele não
 pode criar — que é exatamente a restrição verificada nas primeiras linhas.
 [scripts/fluxo-completo.mjs](scripts/fluxo-completo.mjs) percorre o fluxo inteiro
@@ -275,32 +276,40 @@ backend recusa.
 | `DatabaseModule` | conexão Sequelize, registro de models | — |
 | `AuthModule` | login, JWT, guards globais (não cria usuário) | `AuthService` |
 | `UsuariosModule` | `Usuario`, `Aluno`, `Professor`, hash argon2id | `UsuariosService`, `HashService` |
-| `DisciplinasModule` | catálogo mínimo | `DisciplinasService` |
+| `DisciplinasModule` | catálogo mínimo (N:M com cursos) | `DisciplinasService` |
 | `MonitoriasModule` | `Monitoria` + `MonitoriaParticipante` | `ParticipacaoService`, `ParticipacaoGuard` |
 | `DisponibilidadesModule` | recorrência semanal do monitor | `DisponibilidadesService` |
 | `AtendimentosModule` | sessão, inscrições, histórico de status | `AtendimentosService` |
 | `AvaliacoesModule` | avaliação pós-atendimento | `AvaliacoesService` |
 | `MateriaisModule` | acervo da monitoria | `MateriaisService` |
 | `LogsModule` | trilha de requisições (`@Global()`): interceptor, middleware e redação | `LogsService` |
-| `EmailModule` | serviço de e-mail (Brevo) — **preparado, sem envio**. `@Global()` | `EmailService` |
+| `EmailModule` | serviço de e-mail (Brevo), ponto único de saída. `@Global()` | `EmailService` |
 | `GamificacaoModule` | pontuação e ranking (módulo folha) | `GamificacaoService` |
 | `AnalyticsModule` | indicadores agregados (somente leitura) | — |
+| `CursosModule` | catálogo de cursos | `CursosService` |
+| `NotificacoesModule` | avisos por e-mail (outbox + agendador) | `NotificacoesService` |
+| `EditaisModule` | editais de seleção, inscrições públicas e boletim em PDF (módulo folha) | — |
 
 ### Grafo de dependências (acíclico)
 
 ```
 Auth ─► Usuarios ◄─ Monitorias ◄─┬─ Disponibilidades
                        ▲          ├─ Materiais
-Disciplinas ───────────┘          ├─ Avaliacoes
-                                  ├─ Analytics
-                            Atendimentos ─► Disponibilidades
+Cursos ◄─ Disciplinas ─┘          ├─ Avaliacoes
+   ▲          ▲                   ├─ Analytics
+   └──────────┴── Editais   Atendimentos ─► Disponibilidades
 
-Gamificacao ◄╌╌ (eventos) ╌╌ Atendimentos, Avaliacoes
+Gamificacao   ◄╌╌ (eventos) ╌╌ Atendimentos, Avaliacoes
+Notificacoes  ◄╌╌ (eventos) ╌╌ Atendimentos, Participantes
 ```
 
-A seta tracejada é a única comunicação por evento — e é intencional: nenhum
-módulo do núcleo importa `GamificacaoModule`. `EmailModule` não aparece no grafo
-porque ainda não tem consumidor.
+As setas tracejadas são a única comunicação por evento — e é intencional: nenhum
+módulo do núcleo importa `GamificacaoModule` nem `NotificacoesModule`.
+`EditaisModule` é folha no outro sentido: ele importa (`Cursos`, `Disciplinas`,
+e os models `Professor`/`Aluno` para leitura), mas ninguém o importa. A seleção
+**termina** quando o professor cadastra o aprovado pelas rotas que já existem —
+não há automação ligando inscrição aprovada a `usuarios`, por exigência do
+escopo. `EmailModule` não aparece no grafo porque é `@Global()`.
 
 ---
 
@@ -695,6 +704,93 @@ continua cancelado mesmo que o aviso falhe** — mesma política da gamificaçã
 
 ---
 
+## Curso, e a regra que ele introduz
+
+`CURSO` tem a mesma forma de `DISCIPLINA` — nome livre, código gerado e
+imutável, `ativo` em vez de `DELETE` (RN10). O CRUD é do professor:
+
+```
+POST  /api/cursos        { nome }            -> codigo gerado (ENG001)
+GET   /api/cursos        ?busca= &ativo=
+GET   /api/cursos/:id
+PATCH /api/cursos/:id    { nome?, ativo? }   -> codigo nunca muda
+```
+
+**Uma disciplina pode ser de vários cursos** — "Banco de Dados" é de Sistemas de
+Informação *e* de Engenharia da Computação, com um cadastro só. **Cada aluno
+pertence a um curso. E um aluno só participa de monitoria de disciplina
+oferecida no seu curso** — para os dois papéis, porque monitorar pressupõe ter
+cursado a disciplina.
+
+Uma monitoria de Banco de Dados atende alunos dos dois cursos: não é preciso
+criar uma por curso.
+
+### A regra é garantida pelo banco, não pelo service
+
+Seguindo AD-05 e o mesmo recurso que já sustenta RN01, RN02 e RN04, a regra vira
+uma cadeia de **FKs compostas**:
+
+```
+monitoria_participantes (aluno_id, curso_id)          -> alunos            (usuario_id, curso_id)
+monitoria_participantes (monitoria_id, disciplina_id) -> monitorias        (id, disciplina_id)
+monitoria_participantes (disciplina_id, curso_id)     -> disciplina_cursos (disciplina_id, curso_id)
+```
+
+Lidas juntas: o curso do vínculo é o do **aluno**; a disciplina do vínculo é a
+da **monitoria**; e o par (disciplina, curso) tem de existir na associação. Logo
+o curso do aluno está entre os cursos da disciplina — **e não há `INSERT` direto
+que viole isso**, nem só pela API. Verificado com SQL cru, fora da aplicação:
+
+| Tentativa | Constraint que recusou |
+|---|---|
+| aluno de curso que não oferece a disciplina | `fk_participante_disciplina_curso` |
+| forjar o curso do vínculo | `fk_participante_aluno_curso` |
+| forjar a disciplina do vínculo | `fk_participante_monitoria_disciplina` |
+| trocar o curso de aluno que já participa | `fk_participante_aluno_curso` |
+| remover associação disciplina-curso em uso | `fk_participante_disciplina_curso` |
+
+A checagem no service existe para dar mensagem decente, não para garantir.
+
+`curso_id` e `disciplina_id` aparecem denormalizados em
+`monitoria_participantes` porque uma FK composta só referencia colunas da
+própria linha. Não é dado solto: o `ON UPDATE CASCADE` propaga da origem, como
+já acontece com `inicio`/`fim` das inscrições.
+
+### Filtrar por curso
+
+`GET /api/disciplinas?cursoId=` e `GET /api/alunos?cursoId=` restringem a
+listagem a um curso. No caso das disciplinas o filtro é de **pertinência** (a
+disciplina aparece se o curso estiver entre os dela) e é feito por subconsulta,
+não por `where` dentro do `include` — este último transformaria o join em
+`INNER` e faria cada disciplina voltar **só com o curso filtrado**, afirmando
+que Banco de Dados pertence a um curso só. Filtrar quais itens aparecem é
+diferente de filtrar o conteúdo de cada item.
+
+### Consequência: trocar o aluno de curso
+
+Fica bloqueado enquanto existir **qualquer** participação dele — inclusive
+encerrada, já que a RN10 preserva histórico para sempre. Mudar o curso depois
+reescreveria o passado, afirmando que uma monitoria cursada ocorreu em um curso
+em que ela não ocorreu. `PATCH /api/alunos/eu` devolve `409` explicando quantas
+participações existem.
+
+### O que mudou nos contratos
+
+| Antes | Agora |
+|---|---|
+| `POST /api/alunos` com `curso` (texto livre, opcional) | `cursoId` (uuid, **obrigatório**) |
+| `POST /api/disciplinas` com `{ nome }` | `{ nome, cursosIds: [...] }` — pelo menos um curso |
+| `PATCH /api/alunos/eu` com `curso` | `cursoId` |
+| `PATCH /api/disciplinas/:id` | aceita `cursosIds`, que **substitui** o conjunto |
+| resposta de disciplina | ganhou `cursos: [{ id, codigo, nome }]` |
+| `aluno.curso` na resposta: texto digitado | **nome do curso vinculado** (campo preservado), com `aluno.cursoId` ao lado |
+
+A coluna `alunos.curso` foi removida: mantê-la ao lado do FK faria a informação
+divergir, e o valor nunca foi confiável — eram textos digitados à mão, como
+"si" e "Engenharia".
+
+---
+
 ## Código da disciplina
 
 `POST /api/disciplinas` recebe **só o nome**. O código é gerado pelo servidor no
@@ -816,8 +912,14 @@ modelo de autenticação, não na recuperação de senha.
 ## Endpoints
 
 Todas as rotas exigem `Authorization: Bearer <token>`, exceto as marcadas como
-públicas. **Não existe `DELETE` em nenhum lugar desta API**: sair, cancelar,
-encerrar e remover são transições de estado (RN10).
+públicas.
+
+**Existe exatamente um `DELETE` nesta API — e ele não apaga nada.**
+`DELETE /api/editais/:id` marca `ativo = false`. O verbo está ali porque o
+escopo da feature de editais pede "excluir edital" e é o que um cliente REST
+espera; o efeito continua sendo transição de estado. Em todo o resto da API,
+sair, cancelar, encerrar e remover também são transições de estado, sem verbo
+`DELETE` (RN10 — nada de histórico é destruído).
 
 ### Metadados
 
@@ -839,15 +941,27 @@ encerrar e remover são transições de estado (RN10).
 | `PATCH` | `/api/alunos/eu` | **ALUNO** |
 | `GET` | `/api/alunos/:usuarioId` | PROFESSOR ou o próprio |
 | `POST` | `/api/professores` | **PROFESSOR** — único caminho de criação de professor |
+| `GET` | `/api/professores/publicos` | **público** — só id, nome e departamento (sem e-mail) |
 | `GET` | `/api/professores` · `/api/professores/:usuarioId` | autenticado |
 | `PATCH` | `/api/professores/eu` | **PROFESSOR** |
 
-### Disciplinas
+### Cursos e disciplinas
 
 | Método | Rota | Acesso |
 |---|---|---|
+| `POST` `PATCH` | `/api/cursos` · `/api/cursos/:id` | **PROFESSOR** |
+| `GET` | `/api/cursos` · `/api/cursos/:id` | **público** — catálogo, sem dado pessoal |
 | `POST` `PATCH` | `/api/disciplinas` · `/api/disciplinas/:id` | **PROFESSOR** |
-| `GET` | `/api/disciplinas` · `/api/disciplinas/:id` | autenticado |
+| `GET` | `/api/disciplinas` · `/api/disciplinas/:id` | **público** — `?cursoId=` recorta por curso |
+
+As quatro leituras de catálogo eram autenticadas e passaram a ser públicas com a
+feature de editais: o formulário de inscrição precisa montar as listas de curso,
+disciplina e professor **sem token**, porque o candidato ainda não tem conta. A
+alternativa seria duplicar as três consultas em rotas públicas paralelas — o
+endpoint redundante que o escopo manda evitar. Nenhuma delas expõe dado pessoal;
+a de professores é a exceção e por isso ganhou projeção própria
+(`/api/professores/publicos`, sem e-mail). **Toda a escrita continua restrita a
+PROFESSOR.**
 
 ### Monitorias
 
@@ -916,6 +1030,195 @@ encerrar e remover são transições de estado (RN10).
 | `GET` | `/api/analytics/resumo` | **PROFESSOR** |
 | `GET` | `/api/analytics/monitorias/:monitoriaId` | participante ou responsável |
 | `GET` | `/api/analytics/monitorias/:monitoriaId/monitores` | professor responsável |
+
+### Editais e inscrições
+
+| Método | Rota | Acesso |
+|---|---|---|
+| `POST` | `/api/editais` | **PROFESSOR** |
+| `GET` | `/api/editais` | **PROFESSOR** — `?ano=` `?semestre=` `?ativo=` `?direcao=` |
+| `GET` | `/api/editais/abertos` | **público** — só os que aceitam inscrição hoje |
+| `GET` `PATCH` | `/api/editais/:id` | **PROFESSOR** |
+| `DELETE` | `/api/editais/:id` | **PROFESSOR** — exclusão **lógica** (`ativo = false`) |
+| `POST` | `/api/editais/:editalId/inscricoes` | **público** (**20 req/min**) — `multipart/form-data` |
+| `GET` | `/api/inscricoes` | **PROFESSOR** — filtros e ordenações abaixo |
+| `GET` | `/api/inscricoes/:id` | **PROFESSOR** |
+| `GET` | `/api/inscricoes/:id/boletim` | **PROFESSOR** — devolve o PDF como anexo |
+
+**Filtros de `GET /api/inscricoes`:** `editalId`, `cursoId`, `disciplinaId`,
+`turno`, `professorId`, `ano` e `semestre` (do edital, por JOIN), `busca`
+(parcial em nome, matrícula **ou** e-mail), `pagina`, `limite` (teto 100).
+
+**Ordenações:** `media`, `n1`, `n2`, `nome`, `matricula`, `criadoEm` — cada uma
+com `direcao=asc|desc`. Nota ausente vai **sempre para o fim** da lista, nas
+duas direções.
+
+---
+
+## Editais de seleção de monitores
+
+[`src/modules/editais/`](src/modules/editais/) implementa o processo seletivo: o
+professor publica o edital, qualquer pessoa se candidata **sem conta**, e a
+banca consulta as candidaturas com filtros e ordenações.
+
+É a primeira parte do sistema que aceita **escrita pública**, e isso define
+quase todas as decisões abaixo.
+
+### A candidatura não cria identidade
+
+Nome, matrícula e e-mail do candidato são **colunas de `inscricoes_edital`**, não
+FK para `alunos`. A ordem dos fatos exige isso: a conta do monitor é criada pelo
+professor **depois** da aprovação, então exigir cadastro para se candidatar
+inverteria o processo. `POST /api/editais/:id/inscricoes` não grava linha em
+`usuarios` nem em `alunos` — o fluxo ponta a ponta verifica isso consultando as
+duas tabelas após a inscrição.
+
+Não existe FK opcional para `alunos`. Um candidato que já é aluno hoje seria
+ligado, e um que se cadastrasse depois ficaria com a coluna nula para sempre — a
+mesma pergunta teria duas respostas dependendo da ordem dos acontecimentos. O
+cruzamento é feito na **leitura**, por matrícula, e aparece como
+`alunoCadastrado` nas respostas do professor: é assim que ele sabe de quem não
+precisa criar conta ao aprovar.
+
+### A média é coluna gerada pelo PostgreSQL
+
+```sql
+media numeric(4,2) GENERATED ALWAYS AS (round((n1 + n2) / 2, 2)) STORED
+```
+
+A exigência era "o cliente não pode definir ou sobrescrever a média". Calcular no
+service atenderia ao pedido pela via mais frágil possível — um seed, um script de
+manutenção ou um `INSERT` direto furariam a garantia sem esforço. Coluna gerada é
+**não-gravável pelo próprio banco**: o PostgreSQL recusa qualquer
+`INSERT`/`UPDATE` que a mencione. O fluxo ponta a ponta tenta
+`UPDATE inscricoes_edital SET media = 10` por SQL direto e registra a recusa.
+
+São três barreiras independentes para a mesma regra: `media` não existe no DTO (e
+mandá-la devolve `400` pelo `forbidNonWhitelisted`), o service não a menciona no
+`create`, e o banco não deixa escrever.
+
+**Nota ausente → média nula, nunca zero.** Em SQL, aritmética com `NULL` é
+`NULL`, então a regra é consequência do tipo e não de um `if`. O ponto delicado
+está no transporte: a inscrição chega como `multipart/form-data` por causa do
+PDF, e ali um campo em branco chega como `''`. `@Type(() => Number)` converteria
+isso em **zero** — o candidato apareceria na banca com uma nota que ninguém lhe
+deu. Por isso a conversão é explícita (`notaInformada`) e `''` vira "não
+informado".
+
+E, como média nula não é média baixa, a ordenação usa `NULLS LAST` nas **duas**
+direções: o padrão do PostgreSQL é `NULLS FIRST` em `DESC`, o que colocaria o
+candidato sem nota como primeiro colocado.
+
+### Curso × disciplina, garantido por FK composta
+
+"A disciplina selecionada deve pertencer ao curso informado" é a mesma classe de
+regra de RN01/RN02/RN04, e usa o mesmo recurso:
+
+```
+inscricoes_edital (disciplina_id, curso_id) -> disciplina_cursos (disciplina_id, curso_id)
+```
+
+O service faz a mesma pergunta antes, só para a resposta dizer *qual* curso e
+*qual* disciplina não combinam, em vez de devolver uma violação de constraint.
+
+### O PDF do boletim: BYTEA, em tabela separada
+
+O projeto não tem camada de objetos (AD-12/D-19 prevê disco local, ainda não
+implementado). Introduzir uma para este caso significaria adicionar provedor,
+credenciais, política de expiração e um segundo lugar de onde o dado pode
+desaparecer. O volume não justifica: um processo seletivo recebe dezenas a
+centenas de candidaturas por semestre, com PDFs de poucas centenas de KB — ordem
+de grandeza de MB por edital, dentro do que o backup lógico absorve sem mudança
+de rotina.
+
+O ganho concreto é transacional: o PDF entra e sai junto com a inscrição, no
+mesmo `COMMIT`. Com objeto externo existiriam dois estados de falha que aqui
+simplesmente não existem — arquivo gravado sem inscrição e inscrição gravada sem
+arquivo.
+
+**A tabela é separada, e isso é o que faz a decisão funcionar.** A listagem da
+banca pagina candidaturas e nunca precisa dos bytes; se o `BYTEA` morasse na
+mesma linha, qualquer consulta que não enumerasse colunas arrastaria megabytes
+por página. Separado, o binário só é lido por quem faz o `JOIN` de propósito: uma
+única rota, autenticada, que entrega um arquivo.
+
+Validação do upload, em camadas que não se substituem:
+
+| Camada | O que cobre |
+|---|---|
+| `limits.fileSize` no multer | corta o fluxo antes de encher a memória → `413` |
+| `mimetype` no service | o tipo **declarado pelo cliente**; dá mensagem clara no caso honesto, mas não prova nada |
+| assinatura `%PDF-` | está no **conteúdo**; é o que impede gravar um executável renomeado |
+
+As duas últimas valem também no banco: `ck_boletim_pdf` confere a assinatura e
+`ck_boletim_tamanho` exige `octet_length(conteudo) = tamanho_bytes` com teto de
+5 MB. `conteudo` tem `STORAGE EXTERNAL` — PDF já é comprimido, e comprimir de
+novo gasta CPU para ganhar quase nada.
+
+O download sai com `Content-Disposition: attachment` (nunca `inline`: PDF
+renderizado a partir do nosso domínio é superfície de execução de conteúdo de
+terceiro), nome sanitizado no `filename` ASCII mais `filename*` em UTF-8, e
+`Cache-Control: no-store`.
+
+### O e-mail de confirmação, e por que não há outbox aqui
+
+O envio acontece **depois do commit**, e sua falha não desfaz nada. É o inverso
+da escolha feita na criação de usuário — e a diferença é que lá o e-mail
+*entrega* a credencial, sem a qual a conta nasce inutilizável. Aqui ele apenas
+*confirma* um fato já gravado: apagar a candidatura porque o provedor está fora
+puniria o candidato por um problema nosso, e o prazo do edital pode nem permitir
+nova tentativa. A resposta devolve `emailConfirmacaoEnviado` e o identificador —
+que é o que ele precisa para cobrar a coordenação.
+
+Não há outbox (ao contrário das notificações) porque **não há o que
+desduplicar**: a mensagem é uma por candidatura, enviada em um ponto que só é
+alcançado uma vez. Uma segunda tentativa do candidato é recusada pelo banco
+(`UNIQUE (edital_id, matricula)` e `UNIQUE (edital_id, email)`) antes de qualquer
+inserção — não há inscrição duplicada nem segundo e-mail. O e-mail não leva nota,
+média nem o PDF: ele confirma um ato, não é comprovante de desempenho, e trafega
+por servidor de terceiro.
+
+### Exclusão de edital é lógica
+
+`DELETE /api/editais/:id` marca `ativo = false`. O edital é o contexto das
+candidaturas que ele recebeu; apagar a linha deixaria candidatos apontando para
+um processo que o sistema afirma nunca ter existido, e a FK em
+`inscricoes_edital` é `RESTRICT` — recusaria a remoção de qualquer forma (RN10).
+É idempotente, e `PATCH { "ativo": true }` reativa.
+
+Edital inexistente e edital excluído respondem **o mesmo `404`** na rota pública:
+para quem não está autenticado, confirmar que um id existe mas foi retirado é
+informação sobre a operação interna da instituição. Fora do período é `409` com
+as datas, porque aí a informação é útil e não revela nada.
+
+### "Hoje" é o dia da instituição
+
+As datas do edital são `date`, não `timestamptz`: "inscrições de 10/11 a 25/11" é
+uma afirmação sobre **dias do calendário local**, não sobre instantes. Guardar
+instante obrigaria a escolher uma hora de corte arbitrária e faria o mesmo edital
+abrir em dias diferentes conforme o fuso de quem lê.
+
+Quem decide se hoje está no período é o PostgreSQL —
+`(now() AT TIME ZONE :fuso)::date::text` —, o mesmo cuidado que disponibilidades
+já tomam. O `::text` não é detalhe: sem ele o driver devolveria `date` como
+`Date` à meia-noite do fuso do **processo**, reintroduzindo exatamente o fuso que
+a consulta existe para tirar do caminho.
+
+### Escopo de acesso da banca
+
+Todo **PROFESSOR** consulta todas as inscrições. Não é omissão: o perfil
+PROFESSOR é institucional e não hierárquico (não existe ADMIN, e o conjunto de
+professores se expande por decisão de quem já está dentro), e um processo seletivo
+é conduzido por banca, não pelo professor que cada candidato indicou —
+restringir a listagem ao `professorId` de cada inscrição impediria exatamente o
+uso para o qual ela existe. O que existe é o **filtro** `professorId`, com que um
+professor vê as candidaturas que o indicaram. Isso é recorte de consulta, não de
+permissão.
+
+Nenhuma rota pública devolve dado de candidato. `GET /editais/abertos` tem
+projeção própria (sem `ativo`, sem timestamps) e a confirmação do `POST` devolve
+apenas id, edital, nome e se o e-mail saiu — nem notas, nem média, nem metadado
+do arquivo.
 
 ---
 
@@ -1184,18 +1487,20 @@ origem configurada de qualquer forma.
 ## Escopo
 
 **Implementado:** autenticação, autorização, usuários, alunos, professores,
-disciplinas, monitorias, participantes, disponibilidades, atendimentos,
+cursos, disciplinas, monitorias, participantes, disponibilidades, atendimentos,
 cancelamentos, histórico de status, avaliações, materiais, gamificação
-(pontuação e ranking) e analytics.
+(pontuação e ranking), analytics, trilha de requisições, recuperação de senha,
+notificações por e-mail e **editais de seleção de monitores** (com inscrição
+pública e boletim em PDF).
 
 **Deliberadamente fora desta versão:**
 
 | Item | Situação |
 |---|---|
-| **Upload de arquivo em materiais** | **Confirmado fora de escopo (C5).** O material é um **link**, e `MateriaisService` força `tipo: LINK`. As colunas `arquivo_*` e o valor `ARQUIVO` existem no schema como preparação documentada, mas **não há endpoint de upload nem `StorageService`** — o frontend não deve oferecer upload de arquivo. Construí-lo é uma fase própria: storage, MIME por magic number, limite de tamanho e download autenticado (nunca estático, senão RN07 é burlada). Desenho pronto em `docs/arquitetura.md` §7.4. |
+| **Upload de arquivo em materiais** | **Confirmado fora de escopo (C5).** O material é um **link**, e `MateriaisService` força `tipo: LINK`. As colunas `arquivo_*` e o valor `ARQUIVO` existem no schema como preparação documentada, mas **não há endpoint de upload de material nem `StorageService`** — o frontend não deve oferecer upload ali. A feature de editais trouxe o **primeiro** upload binário da API (o boletim do candidato), e ele não serve de atalho para esta: é `BYTEA` em tabela 1:1, para um volume de MB por semestre, e não uma camada de arquivos reutilizável. Material é acervo que cresce sem teto e precisaria de storage próprio, com a autorização de RN07 em cada download. Desenho pronto em `docs/arquitetura.md` §7.4. |
 | **Badges, níveis, recompensas** | O livro-razão de pontos já suporta: badge é uma regra que lê os eventos, nível é uma faixa da soma. Nenhum schema novo é necessário. |
 | **Perfil ADMIN / coordenação** | Não há ator acima do professor no domínio descrito. |
-| **Notificações, lista de espera, chat** | Não solicitados. |
+| **Lista de espera, chat** | Não solicitados. |
 
 ---
 

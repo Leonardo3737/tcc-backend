@@ -53,6 +53,26 @@ export const MENSAGENS_POR_CONSTRAINT: Record<string, string> = {
     'Esta faixa de horario se sobrepoe a outra disponibilidade ja cadastrada.',
 
   uq_inscricao_unica: 'Este aluno ja possui inscricao neste atendimento.',
+
+  // Editais — uma candidatura por pessoa em cada edital.
+  uq_inscricao_edital_matricula: 'Ja existe uma inscricao com esta matricula neste edital.',
+  uq_inscricao_edital_email: 'Ja existe uma inscricao com este e-mail neste edital.',
+
+  /**
+   * FK composta que sustenta "a disciplina tem de pertencer ao curso".
+   *
+   * O service verifica isso antes e devolve mensagem com os nomes; esta entrada
+   * cobre a corrida — a associacao disciplina/curso ser desfeita entre a
+   * validacao e o INSERT.
+   */
+  fk_inscricao_disciplina_curso: 'A disciplina informada nao e oferecida pelo curso informado.',
+
+  // CHECKs de editais e inscricoes, que o service tambem valida antes.
+  ck_edital_periodo: 'O fim das inscricoes nao pode ser anterior ao inicio.',
+  ck_inscricao_n1: 'A nota N1 deve estar entre 0 e 10.',
+  ck_inscricao_n2: 'A nota N2 deve estar entre 0 e 10.',
+  ck_boletim_pdf: 'O arquivo enviado nao e um PDF valido.',
+  ck_boletim_tamanho: 'O boletim excede o tamanho maximo permitido.',
 };
 
 /**

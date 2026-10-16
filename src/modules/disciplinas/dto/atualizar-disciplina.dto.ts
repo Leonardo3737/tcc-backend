@@ -1,6 +1,15 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
 import { Transform } from 'class-transformer';
-import { IsBoolean, IsOptional, IsString, Length } from 'class-validator';
+import {
+  ArrayMaxSize,
+  ArrayMinSize,
+  IsArray,
+  IsBoolean,
+  IsOptional,
+  IsString,
+  IsUUID,
+  Length,
+} from 'class-validator';
 
 /**
  * `codigo` nao e editavel: monitorias e materiais ja publicados o referenciam
@@ -21,4 +30,20 @@ export class AtualizarDisciplinaDto {
   @IsOptional()
   @IsBoolean({ message: 'ativa deve ser booleano' })
   ativa?: boolean;
+
+  /**
+   * SUBSTITUI o conjunto de cursos, nao acrescenta.
+   *
+   * Remover um curso e recusado pelo banco enquanto houver participante dele na
+   * disciplina: a FK composta de `monitoria_participantes` aponta para esta
+   * associacao, e apagar a linha deixaria vinculos orfaos de regra. Omitir o
+   * campo nao mexe nos cursos.
+   */
+  @ApiPropertyOptional({ type: [String], format: 'uuid', minItems: 1 })
+  @IsOptional()
+  @IsArray({ message: 'cursosIds deve ser uma lista' })
+  @ArrayMinSize(1, { message: 'a disciplina precisa de ao menos um curso' })
+  @ArrayMaxSize(20, { message: 'no maximo 20 cursos por disciplina' })
+  @IsUUID('4', { each: true, message: 'cada item de cursosIds deve ser um UUID valido' })
+  cursosIds?: string[];
 }

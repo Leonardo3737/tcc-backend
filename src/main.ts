@@ -60,9 +60,10 @@ async function bootstrap() {
       .setTitle('Plataforma de Apoio a Monitoria - API')
       .setDescription(
         'Backend da plataforma de monitoria academica. Cobre a fundacao ' +
-          '(usuarios, alunos, professores, autenticacao e autorizacao) e o nucleo ' +
-          'funcional (disciplinas, monitorias, participantes, disponibilidades e ' +
-          'atendimentos). MONITOR e MONITORADO NAO sao tipos de usuario: sao papeis ' +
+          '(usuarios, alunos, professores, autenticacao e autorizacao), o nucleo ' +
+          'funcional (cursos, disciplinas, monitorias, participantes, disponibilidades e ' +
+          'atendimentos) e a selecao de monitores por edital, cuja inscricao e a UNICA ' +
+          'rota de escrita publica da API. MONITOR e MONITORADO NAO sao tipos de usuario: sao papeis ' +
           'que um ALUNO assume dentro de uma MONITORIA especifica, representados em ' +
           'monitoria_participantes.papel. O mesmo aluno pode ser MONITOR em uma ' +
           'monitoria e MONITORADO em outra.',

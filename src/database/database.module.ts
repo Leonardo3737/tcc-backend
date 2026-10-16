@@ -7,6 +7,7 @@ import { AtendimentoParticipante } from '../modules/atendimentos/entities/atendi
 import { AtendimentoStatusHistorico } from '../modules/atendimentos/entities/atendimento-status-historico.model';
 import { Avaliacao } from '../modules/avaliacoes/entities/avaliacao.model';
 import { Disciplina } from '../modules/disciplinas/entities/disciplina.model';
+import { DisciplinaCurso } from '../modules/disciplinas/entities/disciplina-curso.model';
 import { PontuacaoEvento } from '../modules/gamificacao/entities/pontuacao-evento.model';
 import { RecuperacaoSenha } from '../modules/auth/entities/recuperacao-senha.model';
 import { Notificacao } from '../modules/notificacoes/entities/notificacao.model';
@@ -18,6 +19,10 @@ import { MonitoriaParticipante } from '../modules/monitorias/entities/monitoria-
 import { Aluno } from '../modules/usuarios/entities/aluno.model';
 import { Professor } from '../modules/usuarios/entities/professor.model';
 import { Usuario } from '../modules/usuarios/entities/usuario.model';
+import { Curso } from '../modules/cursos/entities/curso.model';
+import { Boletim } from '../modules/editais/entities/boletim.model';
+import { Edital } from '../modules/editais/entities/edital.model';
+import { InscricaoEdital } from '../modules/editais/entities/inscricao-edital.model';
 
 @Module({
   imports: [
@@ -35,9 +40,11 @@ import { Usuario } from '../modules/usuarios/entities/usuario.model';
 
         models: [
           Usuario,
+          Curso,
           Aluno,
           Professor,
           Disciplina,
+          DisciplinaCurso,
           Monitoria,
           MonitoriaParticipante,
           Disponibilidade,
@@ -50,6 +57,9 @@ import { Usuario } from '../modules/usuarios/entities/usuario.model';
           RecuperacaoSenha,
           Notificacao,
           LogRequisicao,
+          Edital,
+          InscricaoEdital,
+          Boletim,
         ],
 
         /**

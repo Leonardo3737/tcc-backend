@@ -32,4 +32,16 @@ export class FiltroAlunosDto extends PaginacaoDto {
   @IsOptional()
   @IsUUID('4', { message: 'semVinculoAtivoNaMonitoria deve ser um UUID valido' })
   semVinculoAtivoNaMonitoria?: string;
+
+  /**
+   * Restringe a um curso.
+   *
+   * Util no mesmo fluxo da RN01: como um aluno so participa de monitorias de
+   * disciplinas do proprio curso, filtrar por curso reduz a lista de candidatos
+   * ao conjunto que de fato pode ser habilitado.
+   */
+  @ApiPropertyOptional({ format: 'uuid', description: 'Apenas alunos deste curso.' })
+  @IsOptional()
+  @IsUUID('4', { message: 'cursoId deve ser um UUID valido' })
+  cursoId?: string;
 }

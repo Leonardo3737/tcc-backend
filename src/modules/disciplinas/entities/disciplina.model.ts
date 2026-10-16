@@ -1,4 +1,5 @@
 import {
+  BelongsToMany,
   Column,
   DataType,
   Default,
@@ -9,6 +10,8 @@ import {
   Unique,
 } from 'sequelize-typescript';
 
+import { Curso } from '../../cursos/entities/curso.model';
+import { DisciplinaCurso } from './disciplina-curso.model';
 import { Monitoria } from '../../monitorias/entities/monitoria.model';
 
 /**
@@ -33,6 +36,17 @@ export class Disciplina extends Model {
   @Default(true)
   @Column({ type: DataType.BOOLEAN, allowNull: false })
   ativa: boolean;
+
+  /**
+   * Cursos que oferecem esta disciplina. Pelo menos um.
+   *
+   * Define quem pode participar das monitorias dela: so alunos de algum destes
+   * cursos. A garantia nao e desta associacao em si, e sim da FK composta que
+   * aponta de `monitoria_participantes (disciplina_id, curso_id)` para a chave
+   * primaria de `disciplina_cursos`.
+   */
+  @BelongsToMany(() => Curso, () => DisciplinaCurso)
+  cursos?: Curso[];
 
   @HasMany(() => Monitoria)
   monitorias?: Monitoria[];

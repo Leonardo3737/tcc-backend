@@ -232,10 +232,33 @@ Sem coluna `tipo`: o perfil é derivado da existência de `alunos`/`professores`
 | `identificacao_funcional` | varchar(30) UNIQUE NULL | SIAPE/matrícula |
 | `departamento` | varchar(120) NULL | |
 
+### 4.3b `cursos`
+| Coluna | Tipo | Notas |
+|---|---|---|
+| `id` | uuid PK | |
+| `codigo` | citext UNIQUE NOT NULL | **gerado** a partir do nome (ENG001). Imutável |
+| `nome` | varchar(150) NOT NULL | |
+| `ativo` | boolean NOT NULL default true | sem `DELETE` (RN10) |
+
+Topo da cadeia de elegibilidade. A disciplina se liga ao curso por
+`disciplina_cursos` (N:M — a mesma disciplina serve vários cursos), o aluno por
+`alunos.curso_id`, e as FKs compostas exigem que o curso do aluno esteja entre
+os da disciplina para haver participação (AD-22).
+
+### 4.3c `disciplina_cursos`
+| Coluna | Tipo | Notas |
+|---|---|---|
+| `disciplina_id` | uuid, parte da PK | FK → disciplinas |
+| `curso_id` | uuid, parte da PK | FK → cursos |
+
+A PK composta não é só chave técnica: é o **alvo** da FK
+`fk_participante_disciplina_curso`, que sustenta a regra de elegibilidade.
+
 ### 4.4 `disciplinas`
 | Coluna | Tipo | Notas |
 |---|---|---|
 | `id` | uuid PK | |
+| — | — | o curso **não** é coluna: a relação é N:M, em `disciplina_cursos` |
 | `codigo` | citext UNIQUE NOT NULL | **gerado** a partir do nome: prefixo + sequência (CAL001). Imutável. Ver AD-16 |
 | `nome` | varchar(150) NOT NULL | |
 | `ativa` | boolean NOT NULL default true | |
@@ -367,6 +390,71 @@ RN10 proíbe.
 
 ---
 
+### 4.13 `editais`
+| Coluna | Tipo | Notas |
+|---|---|---|
+| `id` | uuid PK | |
+| `inicio_inscricoes` | **date** NOT NULL | dia de calendário local, não instante |
+| `fim_inscricoes` | **date** NOT NULL | `CHECK (fim >= inicio)` — vale também em UPDATE |
+| `link` | text NOT NULL | URL do PDF oficial; o sistema não hospeda o edital |
+| `ano` | smallint NOT NULL | `CHECK BETWEEN 2000 AND 2100` |
+| `semestre` | smallint NOT NULL | `CHECK IN (1,2)` |
+| `ativo` | boolean NOT NULL default true | exclusão **lógica**; `DELETE /editais/:id` só desliga (RN10) |
+
+`date` e não `timestamptz` de propósito: "inscrições de 10/11 a 25/11" afirma algo
+sobre **dias**, e guardar instante obrigaria a escolher uma hora de corte
+arbitrária. Quem decide se hoje está no período é o PostgreSQL, com
+`(now() AT TIME ZONE :fuso)::date` — o mesmo cuidado de `disponibilidades`.
+
+### 4.14 `inscricoes_edital`
+| Coluna | Tipo | Notas |
+|---|---|---|
+| `id` | uuid PK | |
+| `edital_id` | uuid NOT NULL | FK → editais, `ON DELETE RESTRICT` |
+| `nome_completo` | varchar(150) NOT NULL | dado da **pessoa**, não de um usuário |
+| `matricula` | varchar(30) NOT NULL | |
+| `email` | citext NOT NULL | |
+| `curso_id` | uuid NOT NULL | FK → cursos |
+| `disciplina_id` | uuid NOT NULL | FK → disciplinas |
+| `professor_id` | uuid NOT NULL | FK → **professores(usuario_id)** |
+| `turno` | `enum_inscricoes_edital_turno` NOT NULL | |
+| `n1`, `n2` | numeric(4,2) NULL | `CHECK (NULL OR 0..10)`. Nulas: a nota pode não existir ainda |
+| `media` | numeric(4,2) **GENERATED ALWAYS** | `round((n1 + n2) / 2, 2)` STORED |
+
+Única entidade que guarda dados de uma pessoa **sem** linha em `usuarios` — e é
+deliberado: a conta do monitor é criada pelo professor *depois* da aprovação.
+Não há FK opcional para `alunos`; o cruzamento por matrícula é feito na leitura,
+onde o resultado é sempre o estado atual do cadastro.
+
+Restrições de domínio:
+
+| Constraint | Garante |
+|---|---|
+| `fk_inscricao_disciplina_curso` → `disciplina_cursos (disciplina_id, curso_id)` | a disciplina pertence ao curso informado — mesma técnica de RN01/RN04 |
+| `UNIQUE (edital_id, matricula)` | uma candidatura por matrícula em cada edital |
+| `UNIQUE (edital_id, email)` | e uma por e-mail; as duas juntas também tornam a retentativa inócua (sem inscrição nem e-mail duplicados) |
+| `media` gerada | o cliente **não tem como** definir ou sobrescrever a média: o PostgreSQL recusa INSERT/UPDATE que a mencione |
+
+`media` nula quando falta nota: aritmética com `NULL` é `NULL`, então "não
+atribuir zero" é consequência do tipo, não de um `if`. A ordenação usa
+`NULLS LAST` nas duas direções, para ausência não ser lida como nota baixa.
+
+### 4.15 `boletins`
+| Coluna | Tipo | Notas |
+|---|---|---|
+| `inscricao_id` | uuid **PK = FK** | → inscricoes_edital, `ON DELETE CASCADE` |
+| `conteudo` | bytea NOT NULL | `STORAGE EXTERNAL` (PDF já é comprimido) |
+| `nome_original` | varchar(255) NOT NULL | sanitizado antes de gravar e ao servir |
+| `tamanho_bytes` | integer NOT NULL | `CHECK (octet_length(conteudo) = tamanho_bytes)` e teto de 5 MB |
+| `sha256` | char(64) NOT NULL | `CHECK (~ '^[0-9a-f]{64}$')` — detecta corrupção, não é segurança |
+
+PK = FK, como `alunos`/`professores` sobre `usuarios` (AD-03): não existe boletim
+sem candidatura nem dois para a mesma. **Tabela separada é o ponto da decisão** —
+ver §7.4.2. `ck_boletim_pdf` confere a assinatura `%PDF-` nos cinco primeiros
+bytes, então nem um `INSERT` direto grava algo que não seja PDF.
+
+---
+
 ## 5. Relacionamentos e cardinalidades
 
 | # | Relacionamento | Cardinalidade | Observação |
@@ -406,7 +494,16 @@ enum StatusInscricao       { INSCRITO, PRESENTE, AUSENTE, CANCELADA }
 enum OrigemAtendimento     { SOLICITACAO_ALUNO, OFERTA_MONITOR }
 enum ModalidadeAtendimento { PRESENCIAL, REMOTO }
 enum TipoMaterial          { LINK, ARQUIVO }
+enum TipoNotificacao       { LEMBRETE_DIA, ATENDIMENTO_CANCELADO, ... }
+enum Turno                 { MATUTINO, VESPERTINO, NOTURNO }
 ```
+
+`TipoNotificacao` e `Turno` são os **únicos** que existem também como TIPO no
+PostgreSQL (`enum_notificacoes_tipo`, `enum_inscricoes_edital_turno`), em vez de
+`varchar` + `CHECK` como os demais. O custo é conhecido: acrescentar valor exige
+`ALTER TYPE ... ADD VALUE` em migration, e remover exige recriar o tipo. O nome segue a
+convenção `enum_<tabela>_<coluna>` que o Sequelize assume ao gerar casts — batizar
+diferente faria a aplicação referenciar um tipo inexistente em runtime.
 
 `DiaSemana` fica como `smallint` 0–6 (compatível com `Date.getDay()` e com `EXTRACT(DOW)`),
 não como enum de string — evita conversões nas duas pontas.
@@ -457,7 +554,9 @@ INSCRITO ──► PRESENTE   (monitor registra presença; habilita avaliação)
 | RN07 | — | guard de participação + **download por endpoint autenticado** (7.4) |
 | RN08 | — | autor deve ser o professor responsável ou participante `MONITOR` ativo |
 | RN09 | índice único parcial sobre participantes ativos | mensagem de domínio |
-| RN10 | sem `ON DELETE CASCADE`; colunas de status e soft delete | proibir DELETE físico; encerrar via status |
+| RN10 | sem `ON DELETE CASCADE`; colunas de status e soft delete | proibir DELETE físico; encerrar via status. `DELETE /editais/:id` existe e só marca `ativo = false` |
+| Elegibilidade de curso (AD-22) | FKs compostas até `disciplina_cursos`, em `monitoria_participantes` **e** em `inscricoes_edital` | mensagem de domínio nomeando curso e disciplina |
+| Média da inscrição | coluna `GENERATED ALWAYS` — não gravável nem por SQL direto | `media` ausente do DTO (`forbidNonWhitelisted`) e nunca mencionada no `create` |
 
 ### 7.2 Constraints centrais (esboço em SQL, para as migrations)
 
@@ -579,6 +678,32 @@ requisito de **infraestrutura**, não só de guard:
 - Padrões assumidos, configuráveis por env — confirmar se divergir (D-19a): limite de
   **20 MB** por arquivo; whitelist de PDF, imagens e documentos Office.
 
+#### 7.4.2 O boletim do candidato: BYTEA, e por que isso **não** é o `StorageModule`
+
+A feature de editais trouxe o primeiro upload binário da API — o boletim do
+candidato —, e ele é gravado em `BYTEA`, não em disco. A escolha não revoga nada
+do que está acima: ela é possível justamente porque o caso é pequeno e fechado.
+
+| | Boletim (implementado) | Material (§7.4, ainda projetado) |
+|---|---|---|
+| Volume | dezenas a centenas de PDFs por semestre, MB por edital | acervo que cresce sem teto |
+| Vida | ligado a uma candidatura, 1:1 | independente, com autoria e remoção lógica |
+| Leitores | uma rota, só PROFESSOR | participantes da monitoria (RN07) |
+| Transação | entra e sai no mesmo `COMMIT` da inscrição | desacoplado |
+
+O ganho concreto do `BYTEA` aqui é transacional: com objeto externo existiriam
+dois estados de falha que simplesmente não existem — arquivo gravado sem
+inscrição e inscrição gravada sem arquivo. E o custo que normalmente condena
+binário em banco (consulta arrastando megabytes) é neutralizado pela **tabela
+separada**: a listagem da banca pagina candidaturas e nunca toca `boletins`.
+
+O que foi **reaproveitado** de §7.4, porque vale para qualquer upload: MIME por
+magic number em vez de `Content-Type`, nome original nunca usado como caminho,
+`Content-Disposition: attachment` com `nosniff`, limite de tamanho nos dois
+lugares (multer e `CHECK`), e nenhum servir estático. O `StorageModule` continua
+🔵 **projetado, não implementado** — construí-lo para materiais segue sendo uma
+fase própria, e este caso não é atalho para ela.
+
 ### 7.5 Notas de implementação
 
 - `EXCLUDE`, índices parciais e FKs compostas não são gerados pelo `queryInterface` de alto
@@ -606,7 +731,8 @@ requisito de **infraestrutura**, não só de guard:
 | `NotificacoesModule` | avisos por e-mail (modulo folha). Escuta eventos do nucleo e roda o lembrete do dia | `NotificacoesService` |
 | `LogsModule` | trilha de requisicoes: interceptor (sucesso), filtro (erros) e redacao de campos sensiveis | `LogsService` |
 | `UsuariosModule` | `Usuario`, `Aluno`, `Professor` (ciclo de vida 1:1) | `UsuariosService` |
-| `DisciplinasModule` | catálogo | `DisciplinasService` |
+| `CursosModule` | catalogo de cursos; valida o curso informado em disciplina e aluno | `CursosService` |
+| `DisciplinasModule` | catálogo de disciplinas, cada uma pertencente a um curso | `DisciplinasService` |
 | `MonitoriasModule` | `Monitoria` + `MonitoriaParticipante` | `ParticipacaoService`, `ParticipacaoGuard` |
 | `DisponibilidadesModule` | agenda declarada do monitor | `DisponibilidadesService` |
 | `AtendimentosModule` | `Atendimento` + `AtendimentoParticipante` (sessão e inscrições) | `AtendimentosService` |
@@ -616,6 +742,7 @@ requisito de **infraestrutura**, não só de guard:
 | `GamificacaoModule` | pontuação e ranking; módulo folha, acoplado por eventos | `GamificacaoService` |
 | `AnalyticsModule` | indicadores agregados, somente leitura | — |
 | `ConfiguracaoModule` | metadados de operação (fuso, limites de agendamento) | — |
+| `EditaisModule` | editais de seleção, inscrição **pública** e boletim em PDF. Importa `Cursos` e `Disciplinas`; ninguém o importa | — |
 
 ### 8.2 Justificativas
 
@@ -762,7 +889,17 @@ backend/
 │       │   └── atendimentos.{module,controller,service}.ts
 │       ├── avaliacoes/
 │       ├── materiais/
+│       ├── cursos/                      # catalogo de cursos (AD-22)
+│       ├── editais/
+│       │   ├── entities/{edital,inscricao-edital,boletim}.model.ts
+│       │   ├── dto/
+│       │   ├── mensagem-de-confirmacao.ts        # funcao pura; nao conhece o provedor
+│       │   ├── inscricoes-publicas.controller.ts # a UNICA rota de escrita publica
+│       │   ├── inscricoes.controller.ts          # consulta da banca (PROFESSOR)
+│       │   └── editais.{module,controller,service}.ts
 │       ├── email/                       # e-mail transacional (Brevo)
+│       ├── notificacoes/                # avisos por e-mail (outbox + agendador)
+│       ├── logs/                        # trilha de requisicoes
 │       ├── gamificacao/
 │       ├── analytics/
 │       └── configuracao/
@@ -828,6 +965,12 @@ entre o mínimo e o máximo.
 | AD-19 | Edicao de dados basicos | PATCH separado das operacoes de dominio: horario so por /reagendar, status so por /realizar e /cancelar | um PATCH generico seria atalho para contornar validacao de disponibilidade, conflito de agenda (RN03), historico (RN10) e aviso aos inscritos |
 | AD-20 | Horarios livres calculados no servidor | `GET /monitorias/:id/atendimentos/horarios-livres` expande as faixas semanais em SQL e subtrai agenda do monitor e do solicitante | o cliente nao tem como calcular: fuso institucional em `AT TIME ZONE`, inscricoes do solicitante em monitorias que ele nao pode ler, e antecedencia medida contra o relogio do servidor |
 | AD-21 | Agendamento em lote com sucesso parcial | cada ocorrencia em sua propria transacao; resposta 200 com o resultado de cada uma; UM evento de notificacao para a serie | tudo-ou-nada faria um feriado derrubar a serie inteira, que e o problema que o endpoint existe para resolver; um evento por ocorrencia geraria centenas de e-mails de uma vez |
+| AD-22 | Curso como eixo de elegibilidade | `cursos` no topo; disciplina e curso em N:M (`disciplina_cursos`); `curso_id` e `disciplina_id` denormalizados em `monitoria_participantes`; tres FKs compostas exigem que o curso do aluno esteja entre os da disciplina | repete o recurso de RN01/RN02/RN04; a regra deixa de depender da API e vale tambem para INSERT direto. Preco: trocar o aluno de curso fica bloqueado enquanto houver participacao, porque a RN10 preserva historico |
+| AD-23 | Candidatura sem identidade | dados do candidato como colunas de `inscricoes_edital`, sem FK para `alunos`; nenhuma conta criada; cruzamento por matricula feito na LEITURA | a conta do monitor nasce depois da aprovacao, entao exigir cadastro para se candidatar inverteria a ordem dos fatos. FK opcional responderia a mesma pergunta de dois jeitos, dependendo de quando a pessoa se cadastrou |
+| AD-24 | Media como coluna gerada | `GENERATED ALWAYS AS (round((n1+n2)/2, 2)) STORED`; nota ausente produz media NULA; ordenacao com `NULLS LAST` nas duas direcoes | calcular no service atende ao pedido pela via mais fragil: seed, script ou INSERT direto furam a garantia. `NULLS FIRST` (padrao em DESC) poria quem nao tem nota como primeiro colocado |
+| AD-25 | Boletim em BYTEA, em tabela 1:1 | binario fora de `inscricoes_edital`; `STORAGE EXTERNAL`; assinatura `%PDF-` e `octet_length` como CHECK | o PDF entra e sai no mesmo COMMIT da inscricao, eliminando os dois estados de falha do objeto externo. A tabela separada e o que mantem megabytes fora da listagem paginada. NAO substitui o `StorageModule` (ver 7.4.2) |
+| AD-26 | Exclusao logica de edital, com verbo DELETE | `DELETE /editais/:id` marca `ativo = false`; idempotente; reativacao por PATCH | o escopo pede "excluir edital" e e o que um cliente REST espera, mas o edital e o contexto das candidaturas recebidas — a FK RESTRICT recusaria a remocao de qualquer forma (RN10). Divergencia registrada: era a unica API do projeto sem nenhum DELETE |
+| AD-27 | Catalogo legivel sem token | `GET` de cursos, disciplinas e uma projecao minima de professores (sem e-mail) passaram a publicos | o formulario de inscricao precisa montar as listas sem conta. Duplicar as consultas em rotas paralelas seria o endpoint redundante que o escopo proibe; nenhuma delas expoe dado pessoal, e a de professores ganhou DTO proprio por conter e-mail na versao autenticada |
 
 ---
 

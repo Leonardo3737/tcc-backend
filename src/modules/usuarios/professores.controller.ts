@@ -10,6 +10,7 @@ import {
 } from '@nestjs/swagger';
 
 import { Perfis } from '../../common/decorators/perfis.decorator';
+import { Publico } from '../../common/decorators/publico.decorator';
 import { UsuarioAtual } from '../../common/decorators/usuario-atual.decorator';
 import { PaginacaoDto } from '../../common/dto/paginacao.dto';
 import { ApiRespostaPaginada } from '../../common/decorators/api-resposta-paginada.decorator';
@@ -19,6 +20,7 @@ import { UsuarioAutenticado } from '../../common/types/usuario-autenticado';
 import { AtualizarProfessorDto } from './dto/atualizar-professor.dto';
 import { RespostaErro } from '../../common/dto/resposta-erro.dto';
 import { CriarProfessorPeloProfessorDto } from './dto/criar-usuario-pelo-professor.dto';
+import { ProfessorPublicoDto } from './dto/professor-publico.dto';
 import { UsuarioRespostaDto } from './dto/usuario-resposta.dto';
 import { UsuariosService } from './usuarios.service';
 
@@ -81,6 +83,30 @@ export class ProfessoresController {
   @ApiRespostaPaginada(UsuarioRespostaDto)
   listar(@Query() paginacao: PaginacaoDto): Promise<RespostaPaginada<UsuarioRespostaDto>> {
     return this.usuariosService.listarProfessores(paginacao);
+  }
+
+  /**
+   * PUBLICA, com projecao minima. Declarada antes de `GET /:usuarioId` porque o
+   * Nest resolve rotas na ordem do arquivo — depois dele, "publicos" seria
+   * lido como id e o ParseUUIDPipe devolveria 400.
+   *
+   * Existe para o formulario publico de inscricao em edital, que exige escolher
+   * o professor responsavel e nao tem token. NAO e versao publica de
+   * `GET /professores`: aquela devolve e-mail, que rota anonima nao pode expor.
+   * Ver `ProfessorPublicoDto`.
+   */
+  @Publico()
+  @Get('publicos')
+  @ApiOperation({
+    summary: 'Lista professores para o formulario publico de edital. PUBLICO.',
+    description:
+      'Projecao minima: identificador, nome e departamento de professores ATIVOS. ' +
+      'Sem e-mail, sem identificacao funcional. Para os dados completos use GET /professores, ' +
+      'que exige autenticacao.',
+  })
+  @ApiRespostaPaginada(ProfessorPublicoDto)
+  listarPublicos(@Query() paginacao: PaginacaoDto): Promise<RespostaPaginada<ProfessorPublicoDto>> {
+    return this.usuariosService.listarProfessoresPublicos(paginacao);
   }
 
   @Patch('eu')
