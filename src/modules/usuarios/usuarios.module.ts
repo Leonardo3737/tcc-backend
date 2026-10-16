@@ -10,6 +10,7 @@ import { HashService } from './hash.service';
 import { ProfessoresController } from './professores.controller';
 import { UsuariosController } from './usuarios.controller';
 import { UsuariosService } from './usuarios.service';
+import { CursosModule } from '../cursos/cursos.module';
 
 /**
  * USUARIO, ALUNO e PROFESSOR vivem no mesmo modulo porque compartilham um unico
@@ -21,7 +22,10 @@ import { UsuariosService } from './usuarios.service';
  * assim o AuthModule consome tudo de um unico import, sem ciclo.
  */
 @Module({
-  imports: [SequelizeModule.forFeature([Usuario, Aluno, Professor, MonitoriaParticipante])],
+  imports: [
+    SequelizeModule.forFeature([Usuario, Aluno, Professor, MonitoriaParticipante]),
+    CursosModule,
+  ],
   controllers: [UsuariosController, AlunosController, ProfessoresController],
   providers: [UsuariosService, HashService],
   exports: [UsuariosService, HashService],

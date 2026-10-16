@@ -36,6 +36,8 @@ describe('B1 — busca de alunos para o fluxo da RN01', () => {
         { get: () => [] } as never,
         // EmailService: estes testes nao criam usuario, entao nada e entregue.
         {} as never,
+        // CursosService: idem — so a busca de alunos e exercitada aqui.
+        {} as never,
       ),
       findAndCountAll,
       participanteModel,

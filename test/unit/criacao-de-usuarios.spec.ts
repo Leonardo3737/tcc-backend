@@ -13,6 +13,9 @@ import { PerfilUsuario } from '../../src/common/enums/perfil-usuario.enum';
 import { UsuarioAutenticado } from '../../src/common/types/usuario-autenticado';
 import { UsuariosService } from '../../src/modules/usuarios/usuarios.service';
 
+/** Curso usado em todos os cadastros destes testes. */
+const CURSO = '11111111-1111-4111-8111-000000000001';
+
 const professor: UsuarioAutenticado = {
   id: 'prof-1',
   nome: 'Joao',
@@ -46,7 +49,18 @@ function montar(opcoes: OpcoesDeMontagem | string[] = {}) {
     }),
   };
 
-  const alunoModel = { create: jest.fn().mockResolvedValue({ matricula: '2021', curso: null }) };
+  /**
+   * `reload` existe porque a criacao recarrega o aluno para trazer o curso —
+   * sem ele a resposta sairia com `curso: null` logo apos o cadastro.
+   */
+  const alunoModel = {
+    create: jest.fn().mockResolvedValue({
+      matricula: '2021',
+      cursoId: CURSO,
+      curso: { nome: 'Curso' },
+      reload: jest.fn().mockResolvedValue(undefined),
+    }),
+  };
   const professorModel = {
     create: jest.fn().mockResolvedValue({ identificacaoFuncional: null, departamento: null }),
   };
@@ -76,6 +90,8 @@ function montar(opcoes: OpcoesDeMontagem | string[] = {}) {
     estaConfigurado: jest.fn().mockReturnValue(emailConfigurado),
   };
 
+  const cursosService = { exigirAtivo: jest.fn().mockResolvedValue({ id: CURSO, nome: 'Curso' }) };
+
   const service = new UsuariosService(
     usuarioModel as never,
     alunoModel as never,
@@ -85,6 +101,8 @@ function montar(opcoes: OpcoesDeMontagem | string[] = {}) {
     {} as never,
     config as never,
     emailService as never,
+    // CursosService: valida o curso informado antes de criar o aluno.
+    cursosService as never,
   );
 
   return {
@@ -95,6 +113,7 @@ function montar(opcoes: OpcoesDeMontagem | string[] = {}) {
     sequelize,
     hashService,
     emailService,
+    cursosService,
     config,
     criados,
     textoPorHash,
@@ -142,8 +161,8 @@ describe('Criacao de ALUNO pelo professor', () => {
   const dto = {
     nome: 'Bruno Aluno',
     email: 'bruno@ufx.edu.br',
+    cursoId: CURSO,
     matricula: '2021001234',
-    curso: 'Engenharia',
   };
 
   it('grava a autoria vinda do token', async () => {
@@ -175,7 +194,7 @@ describe('Criacao de ALUNO pelo professor', () => {
     await service.criarAlunoComoProfessor(dto, professor.id);
 
     expect(alunoModel.create).toHaveBeenCalledWith(
-      expect.objectContaining({ matricula: '2021001234', curso: 'Engenharia' }),
+      expect.objectContaining({ matricula: '2021001234', cursoId: CURSO }),
       expect.anything(),
     );
   });
@@ -263,7 +282,7 @@ describe('D-09 — dominio institucional vale nos dois caminhos de criacao', () 
 
     await expect(
       service.criarAlunoComoProfessor(
-        { nome: 'Bruno', email: 'bruno@ufx.edu.br', matricula: '2021' },
+        { nome: 'Bruno', email: 'bruno@ufx.edu.br', cursoId: CURSO, matricula: '2021' },
         professor.id,
       ),
     ).resolves.toBeDefined();
@@ -307,7 +326,12 @@ describe('D-09 — dominio institucional vale nos dois caminhos de criacao', () 
  * inacessivel e nem o professor consegue consertar.
  */
 describe('Senha gerada pelo servidor', () => {
-  const dto = { nome: 'Bruno Aluno', email: 'bruno@ufx.edu.br', matricula: '2021001234' };
+  const dto = {
+    nome: 'Bruno Aluno',
+    email: 'bruno@ufx.edu.br',
+    cursoId: CURSO,
+    matricula: '2021001234',
+  };
 
   it('gera a senha sem receber nada de quem cria a conta', async () => {
     const { service, hashService } = montar();
@@ -376,7 +400,12 @@ describe('Senha gerada pelo servidor', () => {
 });
 
 describe('Entrega da senha falha: a conta nao nasce', () => {
-  const dto = { nome: 'Bruno Aluno', email: 'bruno@ufx.edu.br', matricula: '2021001234' };
+  const dto = {
+    nome: 'Bruno Aluno',
+    email: 'bruno@ufx.edu.br',
+    cursoId: CURSO,
+    matricula: '2021001234',
+  };
 
   it('devolve 503 quando o provedor recusa a mensagem', async () => {
     const { service } = montar({ emailEntregue: false });
@@ -448,7 +477,12 @@ describe('Entrega da senha falha: a conta nao nasce', () => {
 });
 
 describe('O e-mail de conta criada leva ao sistema', () => {
-  const dto = { nome: 'Bruno Aluno', email: 'bruno@ufx.edu.br', matricula: '2021001234' };
+  const dto = {
+    nome: 'Bruno Aluno',
+    email: 'bruno@ufx.edu.br',
+    cursoId: CURSO,
+    matricula: '2021001234',
+  };
 
   it('inclui o link de acesso', async () => {
     const { service, emailService } = montar();

@@ -297,6 +297,8 @@ describe('A3 — promocao a monitor', () => {
     const service = new ParticipantesService(
       participanteModel as never,
       {} as never,
+      // DisciplinaCurso: a promocao nao reavalia elegibilidade, so muda o papel.
+      { count: jest.fn().mockResolvedValue(1) } as never,
       {} as never,
       inscricaoModel as never,
       {

@@ -9,6 +9,17 @@ export class DadosAlunoDto {
   @ApiProperty({ example: '2021001234' })
   matricula: string;
 
+  @ApiProperty({ format: 'uuid', description: 'Curso a que o aluno pertence.' })
+  cursoId: string;
+
+  /**
+   * NOME do curso, nao mais texto livre.
+   *
+   * O campo existia como `varchar` digitado a mao e virou relacao. O nome foi
+   * mantido para nao quebrar quem ja consome `aluno.curso`, mas o valor agora
+   * vem de `cursos.nome` — e so aparece quando a relacao foi carregada na
+   * consulta, por isso continua anulavel.
+   */
   @ApiPropertyOptional({ example: 'Ciencia da Computacao', nullable: true })
   curso: string | null;
 }
@@ -84,7 +95,11 @@ export class UsuarioRespostaDto {
     dto.criadoPorUsuarioId = usuario.criadoPorUsuarioId ?? null;
 
     if (alunoVinculado) {
-      dto.aluno = { matricula: alunoVinculado.matricula, curso: alunoVinculado.curso };
+      dto.aluno = {
+        matricula: alunoVinculado.matricula,
+        cursoId: alunoVinculado.cursoId,
+        curso: alunoVinculado.curso?.nome ?? null,
+      };
     }
 
     if (professorVinculado) {

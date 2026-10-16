@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ConflictException,
   Injectable,
   Logger,
   NotFoundException,
@@ -16,8 +17,11 @@ import { EmailService } from '../email/email.service';
 
 import { PaginacaoDto } from '../../common/dto/paginacao.dto';
 import { RespostaPaginada } from '../../common/dto/resposta-paginada.dto';
+import { ProfessorPublicoDto } from './dto/professor-publico.dto';
 import { UsuarioRespostaDto } from './dto/usuario-resposta.dto';
 import { Aluno } from './entities/aluno.model';
+import { Curso } from '../cursos/entities/curso.model';
+import { CursosService } from '../cursos/cursos.service';
 import { MonitoriaParticipante } from '../monitorias/entities/monitoria-participante.model';
 import { StatusParticipacao } from '../../common/enums/status-participacao.enum';
 import {
@@ -73,6 +77,7 @@ export class UsuariosService {
     private readonly participanteModel: typeof MonitoriaParticipante,
     private readonly config: ConfigService,
     private readonly emailService: EmailService,
+    private readonly cursosService: CursosService,
   ) {}
 
   /**
@@ -83,7 +88,7 @@ export class UsuariosService {
    * mas nao e aluno nem professor. Ou nascem as duas linhas, ou nenhuma.
    */
   async criarAluno(
-    dados: DadosBaseUsuario & { matricula: string; curso?: string | null },
+    dados: DadosBaseUsuario & { matricula: string; cursoId: string },
     entregarCredenciais?: EntregaDeCredenciais,
   ): Promise<UsuarioRespostaDto> {
     return this.sequelize.transaction(async (transaction) => {
@@ -101,12 +106,18 @@ export class UsuariosService {
         {
           usuarioId: usuario.id,
           matricula: dados.matricula,
-          curso: dados.curso ?? null,
+          cursoId: dados.cursoId,
         },
         { transaction },
       );
 
       await entregarCredenciais?.();
+
+      /**
+       * Recarrega com o curso: a instancia recem-criada nao traz a relacao, e
+       * sem ela a resposta sairia com `curso: null` logo apos o cadastro.
+       */
+      await aluno.reload({ include: [Curso], transaction });
 
       return UsuarioRespostaDto.deModelo(usuario, aluno, null);
     });
@@ -161,6 +172,7 @@ export class UsuariosService {
     professorId: string,
   ): Promise<UsuarioRespostaDto> {
     this.validarDominioDoEmail(dto.email);
+    await this.cursosService.exigirAtivo(dto.cursoId);
 
     const senha = gerarSenhaAleatoria();
 
@@ -170,7 +182,7 @@ export class UsuariosService {
         email: dto.email,
         senhaHash: await this.hashService.gerar(senha),
         matricula: dto.matricula,
-        curso: dto.curso ?? null,
+        cursoId: dto.cursoId,
         criadoPorUsuarioId: professorId,
       },
       () => this.entregarSenhaGerada(dto.nome, dto.email, senha),
@@ -312,7 +324,8 @@ export class UsuariosService {
   async buscarPorEmailComSenha(email: string): Promise<Usuario | null> {
     return this.usuarioModel.scope('comSenha').findOne({
       where: { email },
-      include: [Aluno, Professor],
+      // Curso junto: a resposta do login expoe `aluno.curso` pelo nome.
+      include: [{ model: Aluno, include: [Curso] }, Professor],
     });
   }
 
@@ -382,6 +395,10 @@ export class UsuariosService {
       ];
     }
 
+    if (filtro.cursoId) {
+      whereAluno.cursoId = filtro.cursoId;
+    }
+
     if (filtro.semVinculoAtivoNaMonitoria) {
       const vinculados = await this.participanteModel.findAll({
         where: {
@@ -398,7 +415,7 @@ export class UsuariosService {
 
     const { rows, count } = await this.alunoModel.findAndCountAll({
       where: whereAluno,
-      include: [{ model: Usuario, required: true }],
+      include: [{ model: Usuario, required: true }, Curso],
       order: [[{ model: Usuario, as: 'usuario' }, 'nome', 'ASC']],
       limit: filtro.limite,
       offset: filtro.offset,
@@ -412,7 +429,7 @@ export class UsuariosService {
   }
 
   async buscarAlunoOuFalhar(usuarioId: string): Promise<UsuarioRespostaDto> {
-    const aluno = await this.alunoModel.findByPk(usuarioId, { include: [Usuario] });
+    const aluno = await this.alunoModel.findByPk(usuarioId, { include: [Usuario, Curso] });
 
     if (!aluno) {
       throw new NotFoundException('Aluno nao encontrado.');
@@ -421,19 +438,41 @@ export class UsuariosService {
     return UsuarioRespostaDto.deModelo(aluno.usuario!, aluno, null);
   }
 
+  /**
+   * Troca de curso do aluno.
+   *
+   * Recusada quando ja ha participacao em monitoria — inclusive ENCERRADA. As
+   * FKs compostas exigem que o curso do vinculo seja ao mesmo tempo o do aluno
+   * e o da monitoria; com historico preservado pela RN10, mudar o curso agora
+   * afirmaria que uma monitoria cursada ocorreu em um curso em que ela nao
+   * ocorreu. A checagem existe para dar mensagem decente — quem recusa de fato
+   * e o banco.
+   */
   async atualizarDadosAluno(
     usuarioId: string,
-    dados: { curso?: string | null },
+    dados: { cursoId?: string },
   ): Promise<UsuarioRespostaDto> {
-    const aluno = await this.alunoModel.findByPk(usuarioId, { include: [Usuario] });
+    const aluno = await this.alunoModel.findByPk(usuarioId, { include: [Usuario, Curso] });
 
     if (!aluno) {
       throw new NotFoundException('Aluno nao encontrado.');
     }
 
-    // `matricula` nao entra aqui de proposito: e dado de identidade institucional,
-    // nao deve ser editavel pelo proprio aluno.
-    await aluno.update({ curso: dados.curso ?? null });
+    if (dados.cursoId !== undefined && dados.cursoId !== aluno.cursoId) {
+      const participacoes = await this.participanteModel.count({ where: { alunoId: usuarioId } });
+
+      if (participacoes > 0) {
+        throw new ConflictException(
+          `Este aluno ja possui ${participacoes} participacao(oes) em monitoria. ` +
+            'Trocar de curso reescreveria esse historico, que a RN10 preserva.',
+        );
+      }
+
+      // `matricula` nao entra aqui de proposito: e dado de identidade
+      // institucional, nao deve ser editavel pelo proprio aluno.
+      await aluno.update({ cursoId: dados.cursoId });
+      await aluno.reload({ include: [Usuario, Curso] });
+    }
 
     return UsuarioRespostaDto.deModelo(aluno.usuario!, aluno, null);
   }
@@ -451,6 +490,39 @@ export class UsuariosService {
     );
 
     return new RespostaPaginada(dados, count, paginacao.pagina, paginacao.limite);
+  }
+
+  /**
+   * Listagem PUBLICA de professores, com projecao minima.
+   *
+   * Serve ao formulario publico de inscricao em edital, que exige escolher o
+   * professor responsavel e nao tem token. Nao reaproveita `listarProfessores`
+   * porque aquela devolve `UsuarioRespostaDto`, que carrega o e-mail — ver a
+   * justificativa inteira em `ProfessorPublicoDto`.
+   *
+   * `attributes` explicitos nos dois modelos, e nao filtragem no DTO: o e-mail
+   * nao e omitido na serializacao, ele nao e SELECIONADO. Assim nem um log de
+   * consulta nem um erro de mapeamento futuro consegue vaza-lo por esta rota.
+   */
+  async listarProfessoresPublicos(
+    paginacao: PaginacaoDto,
+  ): Promise<RespostaPaginada<ProfessorPublicoDto>> {
+    const { rows, count } = await this.professorModel.findAndCountAll({
+      attributes: ['usuarioId', 'departamento'],
+      include: [
+        { model: Usuario, required: true, attributes: ['id', 'nome'], where: { ativo: true } },
+      ],
+      order: [[{ model: Usuario, as: 'usuario' }, 'nome', 'ASC']],
+      limit: paginacao.limite,
+      offset: paginacao.offset,
+    });
+
+    return new RespostaPaginada(
+      rows.map(ProfessorPublicoDto.deModelo),
+      count,
+      paginacao.pagina,
+      paginacao.limite,
+    );
   }
 
   async buscarProfessorOuFalhar(usuarioId: string): Promise<UsuarioRespostaDto> {

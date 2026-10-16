@@ -2,7 +2,7 @@ import { ConflictException } from '@nestjs/common';
 import { Op, UniqueConstraintError } from 'sequelize';
 
 import { DisciplinasService } from '../../src/modules/disciplinas/disciplinas.service';
-import { prefixoDoNome, proximoCodigo } from '../../src/modules/disciplinas/gerador-de-codigo';
+import { prefixoDoNome, proximoCodigo } from '../../src/common/gerador-de-codigo';
 
 /**
  * O codigo da disciplina passou a ser gerado pelo servidor.
@@ -102,6 +102,9 @@ describe('proximoCodigo', () => {
   });
 });
 
+/** Curso usado em todas as criacoes destes testes. */
+const CURSO = '11111111-1111-4111-8111-000000000009';
+
 /** Erro que o Postgres levanta quando o codigo gerado ja existe. */
 function colisao() {
   return new UniqueConstraintError({ errors: [] });
@@ -114,6 +117,7 @@ function montar(comportamento: { existentes?: string[]; falhasSeguidas?: number 
   const criados: { codigo: string; nome: string }[] = [];
 
   const disciplinaModel = {
+    findAndCountAll: jest.fn().mockResolvedValue({ rows: [], count: 0 }),
     findAll: jest.fn().mockImplementation(() =>
       Promise.resolve(
         // Cada criacao bem-sucedida passa a ser enxergada pela consulta
@@ -129,13 +133,42 @@ function montar(comportamento: { existentes?: string[]; falhasSeguidas?: number 
       }
 
       criados.push(dados);
-      return Promise.resolve({ id: 'd-1', ativa: true, createdAt: new Date(), ...dados });
+      return Promise.resolve({
+        id: 'd-1',
+        ativa: true,
+        createdAt: new Date(),
+        cursos: [{ id: CURSO, codigo: 'CUR001', nome: 'Curso' }],
+        reload: jest.fn().mockResolvedValue(undefined),
+        ...dados,
+      });
     }),
   };
 
+  const disciplinaCursoModel = {
+    bulkCreate: jest.fn().mockResolvedValue([]),
+    findAll: jest.fn().mockResolvedValue([]),
+    destroy: jest.fn().mockResolvedValue(0),
+  };
+
+  const cursosService = {
+    exigirAtivo: jest.fn().mockResolvedValue({ id: CURSO, nome: 'Curso', ativo: true }),
+  };
+
   return {
-    service: new DisciplinasService(disciplinaModel as never),
+    service: new DisciplinasService(
+      disciplinaModel as never,
+      disciplinaCursoModel as never,
+      {
+        // A criacao abre transacao; o dublê executa o callback direto.
+        transaction: jest.fn((cb: (t: unknown) => unknown) => cb({})),
+        // `literal` devolve o proprio SQL, para o teste poder inspeciona-lo.
+        literal: jest.fn((sql: string) => sql),
+      } as never,
+      cursosService as never,
+    ),
     disciplinaModel,
+    disciplinaCursoModel,
+    cursosService,
     criados,
   };
 }
@@ -144,7 +177,7 @@ describe('DisciplinasService.criar', () => {
   it('gera o codigo a partir do nome, sem receber nada', async () => {
     const { service, criados } = montar();
 
-    const resposta = await service.criar({ nome: 'Calculo I' });
+    const resposta = await service.criar({ nome: 'Calculo I', cursosIds: [CURSO] });
 
     expect(criados[0].codigo).toBe('CAL001');
     expect(resposta.codigo).toBe('CAL001');
@@ -154,9 +187,9 @@ describe('DisciplinasService.criar', () => {
   it('numera disciplinas de mesmo nome em sequencia', async () => {
     const { service, criados } = montar();
 
-    await service.criar({ nome: 'Calculo I' });
-    await service.criar({ nome: 'Calculo I' });
-    await service.criar({ nome: 'Calculo I' });
+    await service.criar({ nome: 'Calculo I', cursosIds: [CURSO] });
+    await service.criar({ nome: 'Calculo I', cursosIds: [CURSO] });
+    await service.criar({ nome: 'Calculo I', cursosIds: [CURSO] });
 
     expect(criados.map((d) => d.codigo)).toEqual(['CAL001', 'CAL002', 'CAL003']);
   });
@@ -164,7 +197,7 @@ describe('DisciplinasService.criar', () => {
   it('consulta apenas os codigos do mesmo prefixo', async () => {
     const { service, disciplinaModel } = montar();
 
-    await service.criar({ nome: 'Fisica' });
+    await service.criar({ nome: 'Fisica', cursosIds: [CURSO] });
 
     const [opcoes] = disciplinaModel.findAll.mock.calls[0];
 
@@ -179,7 +212,7 @@ describe('DisciplinasService.criar', () => {
   it('tenta de novo quando a constraint recusa o codigo', async () => {
     const { service, disciplinaModel } = montar({ falhasSeguidas: 1 });
 
-    const resposta = await service.criar({ nome: 'Calculo I' });
+    const resposta = await service.criar({ nome: 'Calculo I', cursosIds: [CURSO] });
 
     expect(disciplinaModel.create).toHaveBeenCalledTimes(2);
     expect(resposta.codigo).toBe('CAL001');
@@ -188,7 +221,9 @@ describe('DisciplinasService.criar', () => {
   it('desiste com 409 se a colisao persistir', async () => {
     const { service } = montar({ falhasSeguidas: 99 });
 
-    await expect(service.criar({ nome: 'Calculo I' })).rejects.toThrow(ConflictException);
+    await expect(service.criar({ nome: 'Calculo I', cursosIds: [CURSO] })).rejects.toThrow(
+      ConflictException,
+    );
   });
 
   /**
@@ -199,15 +234,78 @@ describe('DisciplinasService.criar', () => {
     const { service, disciplinaModel } = montar();
     disciplinaModel.create.mockRejectedValue(new Error('conexao perdida'));
 
-    await expect(service.criar({ nome: 'Calculo I' })).rejects.toThrow('conexao perdida');
+    await expect(service.criar({ nome: 'Calculo I', cursosIds: [CURSO] })).rejects.toThrow(
+      'conexao perdida',
+    );
     expect(disciplinaModel.create).toHaveBeenCalledTimes(1);
   });
 
   it('continua a numeracao a partir do que ja existe no banco', async () => {
     const { service, criados } = montar({ existentes: ['CAL001', 'CAL002'] });
 
-    await service.criar({ nome: 'Calculo I' });
+    await service.criar({ nome: 'Calculo I', cursosIds: [CURSO] });
 
     expect(criados[0].codigo).toBe('CAL003');
+  });
+});
+
+describe('Filtro de disciplinas por curso', () => {
+  it('restringe por subconsulta, nao por where no include', async () => {
+    const { service, disciplinaModel } = montar();
+
+    await service.listar({ cursoId: CURSO, pagina: 1, limite: 20, offset: 0 } as never);
+
+    const [opcoes] = disciplinaModel.findAndCountAll.mock.calls[0];
+
+    /**
+     * O include NAO pode ter `where`: isso transformaria o join em INNER e
+     * faria cada disciplina voltar so com o curso filtrado — a resposta
+     * afirmaria que Banco de Dados pertence a um curso so.
+     */
+    expect(opcoes.include.some((i: unknown) => typeof i === 'object' && i && 'where' in i)).toBe(
+      false,
+    );
+
+    expect(String(opcoes.where.id[Op.in])).toContain('disciplina_cursos');
+    expect(opcoes.replacements.cursoFiltrado).toBe(CURSO);
+  });
+
+  it('sem o filtro, nao restringe por id', async () => {
+    const { service, disciplinaModel } = montar();
+
+    await service.listar({ pagina: 1, limite: 20, offset: 0 } as never);
+
+    expect(disciplinaModel.findAndCountAll.mock.calls[0][0].where.id).toBeUndefined();
+  });
+});
+
+describe('Disciplina em varios cursos', () => {
+  it('grava uma associacao por curso informado', async () => {
+    const { service, disciplinaCursoModel } = montar();
+    const outro = '33333333-3333-4333-8333-000000000009';
+
+    await service.criar({ nome: 'Banco de Dados', cursosIds: [CURSO, outro] });
+
+    const [linhas] = disciplinaCursoModel.bulkCreate.mock.calls[0];
+    expect(linhas.map((l: { cursoId: string }) => l.cursoId)).toEqual([CURSO, outro]);
+  });
+
+  /** Mandar o mesmo curso duas vezes violaria a PK composta da associacao. */
+  it('ignora cursos repetidos no corpo', async () => {
+    const { service, disciplinaCursoModel } = montar();
+
+    await service.criar({ nome: 'Banco de Dados', cursosIds: [CURSO, CURSO] });
+
+    expect(disciplinaCursoModel.bulkCreate.mock.calls[0][0]).toHaveLength(1);
+  });
+
+  it('valida cada curso antes de inserir', async () => {
+    const { service, cursosService } = montar();
+    const outro = '33333333-3333-4333-8333-000000000009';
+
+    await service.criar({ nome: 'Banco de Dados', cursosIds: [CURSO, outro] });
+
+    expect(cursosService.exigirAtivo).toHaveBeenCalledWith(CURSO);
+    expect(cursosService.exigirAtivo).toHaveBeenCalledWith(outro);
   });
 });

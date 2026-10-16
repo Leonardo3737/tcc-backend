@@ -13,6 +13,7 @@ import {
 } from 'sequelize-typescript';
 
 import { Aluno } from './aluno.model';
+import { Curso } from '../../cursos/entities/curso.model';
 import { Professor } from './professor.model';
 
 /**
@@ -36,7 +37,9 @@ import { Professor } from './professor.model';
    */
   comPerfis: {
     attributes: { exclude: ['senhaHash'] },
-    include: [Aluno, Professor],
+    // O curso vem junto porque `UsuarioRespostaDto` expoe o NOME dele; sem o
+    // include, todo aluno voltaria com `curso: null` mesmo tendo curso.
+    include: [{ model: Aluno, include: [Curso] }, Professor],
   },
 }))
 @Table({ tableName: 'usuarios', underscored: true, timestamps: true })

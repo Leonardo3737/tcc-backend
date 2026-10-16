@@ -9,6 +9,7 @@ import {
   Unique,
 } from 'sequelize-typescript';
 
+import { Curso } from '../../cursos/entities/curso.model';
 import { Usuario } from './usuario.model';
 
 /**
@@ -29,8 +30,22 @@ export class Aluno extends Model {
   @Column({ type: DataType.STRING(30), allowNull: false })
   matricula: string;
 
-  @Column({ type: DataType.STRING(120), allowNull: true })
-  curso: string | null;
+  /**
+   * Curso do aluno. Substituiu o antigo campo de texto livre.
+   *
+   * E o que decide de quais monitorias ele pode participar: as FKs compostas em
+   * `monitoria_participantes` exigem que este curso coincida com o da
+   * disciplina da monitoria. Por isso trocar de curso e bloqueado enquanto
+   * existir participacao registrada — inclusive encerrada, ja que a RN10
+   * preserva historico e reescreve-lo afirmaria que uma monitoria ocorreu em um
+   * curso em que ela nao ocorreu.
+   */
+  @ForeignKey(() => Curso)
+  @Column({ type: DataType.UUID, allowNull: false })
+  cursoId: string;
+
+  @BelongsTo(() => Curso)
+  curso?: Curso;
 
   @BelongsTo(() => Usuario)
   usuario?: Usuario;

@@ -9,6 +9,7 @@ import {
 } from '@nestjs/swagger';
 
 import { Perfis } from '../../common/decorators/perfis.decorator';
+import { Publico } from '../../common/decorators/publico.decorator';
 import { RespostaErro } from '../../common/dto/resposta-erro.dto';
 import { ApiRespostaPaginada } from '../../common/decorators/api-resposta-paginada.decorator';
 import { RespostaPaginada } from '../../common/dto/resposta-paginada.dto';
@@ -47,16 +48,34 @@ export class DisciplinasController {
     return this.disciplinasService.criar(dto);
   }
 
-  /** Leitura liberada a qualquer autenticado: o aluno precisa navegar o catalogo. */
+  /**
+   * PUBLICA desde a feature de editais.
+   *
+   * O formulario de inscricao em edital nao exige conta — o candidato ainda nao
+   * tem uma — e precisa oferecer a lista de disciplinas para escolher. A
+   * alternativa seria duplicar esta consulta em uma rota publica paralela, que e
+   * exatamente o endpoint redundante que o escopo pede para evitar.
+   *
+   * O que se abre aqui e CATALOGO: codigo, nome, situacao e os cursos que oferecem a disciplina. Nenhum dado pessoal passa por
+   * esta rota. A escrita continua restrita a PROFESSOR.
+   */
+  @Publico()
   @Get()
-  @ApiOperation({ summary: 'Lista disciplinas do catalogo.' })
+  @ApiOperation({
+    summary: 'Lista disciplinas do catalogo. PUBLICO (alimenta o formulario de edital).',
+    description:
+      'Com `cursoId`, devolve so as disciplinas oferecidas por aquele curso — e assim que o ' +
+      'formulario publico de inscricao monta a segunda lista depois de escolhido o curso.',
+  })
   @ApiRespostaPaginada(DisciplinaRespostaDto)
   listar(@Query() filtro: FiltroDisciplinasDto): Promise<RespostaPaginada<DisciplinaRespostaDto>> {
     return this.disciplinasService.listar(filtro);
   }
 
+  /** Publica pela mesma razao de `listar`. */
+  @Publico()
   @Get(':id')
-  @ApiOperation({ summary: 'Detalha uma disciplina.' })
+  @ApiOperation({ summary: 'Detalha uma disciplina. PUBLICO.' })
   @ApiOkResponse({ type: DisciplinaRespostaDto })
   detalhar(@Param('id', ParseUUIDPipe) id: string): Promise<DisciplinaRespostaDto> {
     return this.disciplinasService.detalhar(id);
