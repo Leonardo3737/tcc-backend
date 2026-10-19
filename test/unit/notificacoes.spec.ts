@@ -506,17 +506,17 @@ describe('LEMBRETE_DIA — monitor e monitorado recebem textos diferentes', () =
   it('ao monitorado: mostra quem e o monitor e como desistir', () => {
     const { assunto, corpo } = lembrete(PapelMonitoria.MONITORADO);
 
-    expect(assunto).toContain('voce tem atendimento hoje');
+    expect(assunto).toContain('você tem atendimento hoje');
     expect(corpo).toContain('Monitor(a): Ana Monitora');
-    expect(corpo).toContain('cancele sua inscricao');
+    expect(corpo).toContain('cancele sua inscrição');
   });
 
   it('ao monitor: omite a linha do monitor e nao manda cancelar inscricao', () => {
     const { assunto, corpo } = lembrete(PapelMonitoria.MONITOR, 3);
 
-    expect(assunto).toContain('voce conduz um atendimento hoje');
+    expect(assunto).toContain('você conduz um atendimento hoje');
     expect(corpo).not.toContain('Monitor(a):');
-    expect(corpo).not.toContain('cancele sua inscricao');
+    expect(corpo).not.toContain('cancele sua inscrição');
   });
 
   /** O dado que muda o que o monitor faz: preparar para um ou para oito. */
@@ -527,14 +527,14 @@ describe('LEMBRETE_DIA — monitor e monitorado recebem textos diferentes', () =
   it('ao monitor sem ninguem inscrito: diz isso em palavras e sugere cancelar', () => {
     const { corpo } = lembrete(PapelMonitoria.MONITOR, 0);
 
-    expect(corpo).toContain('nenhum ate agora');
+    expect(corpo).toContain('nenhum até agora');
     expect(corpo).toContain('cancelar');
     expect(corpo).not.toContain('Inscritos: 0');
   });
 
   /** Sem papel informado, cai no texto do monitorado — o caso mais comum. */
   it('sem papel, usa o texto do monitorado', () => {
-    expect(lembrete().corpo).toContain('cancele sua inscricao');
+    expect(lembrete().corpo).toContain('cancele sua inscrição');
   });
 
   it('os dois textos mantem data, disciplina e link', () => {
@@ -564,8 +564,8 @@ describe('O despacho do lembrete separa os dois lados', () => {
     const porUsuario = new Map(criadas.map((c) => [c.usuarioId, String(c.corpo)]));
 
     expect(porUsuario.get('u-monitor')).toContain('Inscritos: 2');
-    expect(porUsuario.get('u-monitor')).not.toContain('cancele sua inscricao');
-    expect(porUsuario.get('u-bruno')).toContain('cancele sua inscricao');
-    expect(porUsuario.get('u-carla')).toContain('cancele sua inscricao');
+    expect(porUsuario.get('u-monitor')).not.toContain('cancele sua inscrição');
+    expect(porUsuario.get('u-bruno')).toContain('cancele sua inscrição');
+    expect(porUsuario.get('u-carla')).toContain('cancele sua inscrição');
   });
 });

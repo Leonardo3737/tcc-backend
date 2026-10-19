@@ -37,16 +37,16 @@ export function montarConfirmacao(dados: DadosDaConfirmacao): MensagemEmail {
 
   return {
     para: [{ email: dados.email, nome: dados.nomeCompleto }],
-    assunto: `Inscricao confirmada — edital de monitoria ${periodo}`,
+    assunto: `Inscrição confirmada — edital de monitoria ${periodo}`,
     texto: [
-      `Ola, ${dados.nomeCompleto}.`,
+      `Olá, ${dados.nomeCompleto}.`,
       '',
-      `Sua inscricao no edital de selecao de monitores ${periodo} foi registrada.`,
+      `Sua inscrição no edital de seleção de monitores ${periodo} foi registrada.`,
       '',
-      `Identificador da inscricao: ${dados.inscricaoId}`,
-      `Guarde este numero: e por ele que a coordenacao localiza sua candidatura.`,
+      `Identificador da inscrição: ${dados.inscricaoId}`,
+      'Guarde este número: é por ele que a coordenação localiza sua candidatura.',
       '',
-      `Prazo de inscricoes: ate ${dados.fimInscricoes}.`,
+      `Prazo de inscrições: até ${dados.fimInscricoes}.`,
       `Edital oficial: ${dados.linkDoEdital}`,
       '',
       /**
@@ -58,7 +58,7 @@ export function montarConfirmacao(dados: DadosDaConfirmacao): MensagemEmail {
        */
       `Plataforma de monitoria: ${dados.urlDoSistema}`,
       '',
-      'Esta mensagem e automatica; nao e necessario responder.',
+      'Esta mensagem é automática; não é necessário responder.',
     ].join('\n'),
   };
 }

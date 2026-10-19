@@ -20,6 +20,7 @@
     "db:seed:undo": "sequelize-cli db:seed:undo:all",
     "criar-professor": "node scripts/criar-professor.mjs",
     "enviar-lembretes": "node scripts/enviar-lembretes.mjs",
+    "ver-emails": "npm run build && node scripts/ver-emails.cjs",
     "test:fluxo": "node scripts/fluxo-completo.mjs",
     "test": "jest",
     "test:watch": "jest --watch",

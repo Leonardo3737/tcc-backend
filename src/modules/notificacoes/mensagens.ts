@@ -59,7 +59,7 @@ function blocoDoAtendimento(
 ): string[] {
   const linhas = [
     `Disciplina: ${dados.disciplina}`,
-    `Quando: ${formatarDataHora(dados.inicio, fuso)} as ${formatarHora(dados.fim, fuso)}`,
+    `Quando: ${formatarDataHora(dados.inicio, fuso)} às ${formatarHora(dados.fim, fuso)}`,
     ...(incluirMonitor ? [`Monitor(a): ${dados.monitor}`] : []),
     `Modalidade: ${dados.modalidade}`,
   ];
@@ -178,15 +178,15 @@ export interface ContextoDaMensagem {
  */
 function lembreteDoMonitorado({ nome, dados, fuso, link }: ContextoDaMensagem): Mensagem {
   return {
-    assunto: `Lembrete: voce tem atendimento hoje (${dados.disciplina})`,
+    assunto: `Lembrete: você tem atendimento hoje (${dados.disciplina})`,
     corpo: [
-      `Ola, ${nome}.`,
+      `Olá, ${nome}.`,
       '',
-      'Voce tem um atendimento de monitoria HOJE:',
+      'Você tem um atendimento de monitoria HOJE:',
       '',
       ...blocoDoAtendimento(dados, fuso),
       '',
-      'Se nao puder comparecer, cancele sua inscricao para liberar a vaga.',
+      'Se não puder comparecer, cancele sua inscrição para liberar a vaga.',
       ...acesse('Ver atendimento', link),
     ].join('\n'),
   };
@@ -203,19 +203,19 @@ function lembreteDoMonitor({ nome, dados, fuso, link, inscritos }: ContextoDaMen
   const quantos = inscritos ?? 0;
 
   return {
-    assunto: `Lembrete: voce conduz um atendimento hoje (${dados.disciplina})`,
+    assunto: `Lembrete: você conduz um atendimento hoje (${dados.disciplina})`,
     corpo: [
-      `Ola, ${nome}.`,
+      `Olá, ${nome}.`,
       '',
-      'Voce conduz um atendimento de monitoria HOJE:',
+      'Você conduz um atendimento de monitoria HOJE:',
       '',
       ...blocoDoAtendimento(dados, fuso, false),
-      `Inscritos: ${quantos === 0 ? 'nenhum ate agora' : quantos}`,
+      `Inscritos: ${quantos === 0 ? 'nenhum até agora' : quantos}`,
       '',
       quantos === 0
-        ? 'Ninguem se inscreveu ate o momento. Se preferir cancelar, faca pela plataforma.'
-        : 'Se precisar cancelar ou mudar o horario, faca pela plataforma: os inscritos',
-      ...(quantos === 0 ? [] : ['sao avisados automaticamente.']),
+        ? 'Ninguém se inscreveu até o momento. Se preferir cancelar, faça pela plataforma.'
+        : 'Se precisar cancelar ou mudar o horário, faça pela plataforma: os inscritos',
+      ...(quantos === 0 ? [] : ['são avisados automaticamente.']),
       ...acesse('Ver atendimento', link),
     ].join('\n'),
   };
@@ -250,30 +250,30 @@ export const MENSAGENS: Record<TipoNotificacao, (contexto: ContextoDaMensagem) =
   [TipoNotificacao.ATENDIMENTO_CANCELADO]: ({ nome, dados, fuso, link, motivo }) => ({
     assunto: `Atendimento CANCELADO: ${dados.disciplina}`,
     corpo: [
-      `Ola, ${nome}.`,
+      `Olá, ${nome}.`,
       '',
-      'O atendimento abaixo foi CANCELADO e nao vai acontecer:',
+      'O atendimento abaixo foi CANCELADO e não vai acontecer:',
       '',
       ...blocoDoAtendimento(dados, fuso),
       '',
-      `Motivo: ${motivo ?? 'nao informado'}`,
+      `Motivo: ${motivo ?? 'não informado'}`,
       '',
-      'Nao e necessario comparecer. Novos horarios aparecem na plataforma.',
+      'Não é necessário comparecer. Novos horários aparecem na plataforma.',
       ...acesse('Ver detalhes', link),
     ].join('\n'),
   }),
 
   [TipoNotificacao.ATENDIMENTO_REAGENDADO]: ({ nome, dados, fuso, link }) => ({
-    assunto: `Novo horario: ${dados.disciplina}`,
+    assunto: `Novo horário: ${dados.disciplina}`,
     corpo: [
-      `Ola, ${nome}.`,
+      `Olá, ${nome}.`,
       '',
-      'Um atendimento em que voce esta inscrito(a) MUDOU DE HORARIO.',
-      'Sua inscricao foi mantida — atencao ao novo horario:',
+      'Um atendimento em que você está inscrito(a) MUDOU DE HORÁRIO.',
+      'Sua inscrição foi mantida — atenção ao novo horário:',
       '',
       ...blocoDoAtendimento(dados, fuso),
       '',
-      'Se o novo horario nao servir, cancele sua inscricao.',
+      'Se o novo horário não servir, cancele sua inscrição.',
       ...acesse('Ver atendimento', link),
     ].join('\n'),
   }),
@@ -281,13 +281,13 @@ export const MENSAGENS: Record<TipoNotificacao, (contexto: ContextoDaMensagem) =
   [TipoNotificacao.ATENDIMENTO_SOLICITADO]: ({ nome, dados, fuso, link }) => ({
     assunto: `Novo atendimento solicitado: ${dados.disciplina}`,
     corpo: [
-      `Ola, ${nome}.`,
+      `Olá, ${nome}.`,
       '',
-      'Um aluno solicitou um atendimento com voce:',
+      'Um aluno solicitou um atendimento com você:',
       '',
       ...blocoDoAtendimento(dados, fuso),
       '',
-      'O horario ja esta reservado na sua agenda.',
+      'O horário já está reservado na sua agenda.',
       ...acesse('Ver atendimento', link),
     ].join('\n'),
   }),
@@ -301,25 +301,25 @@ export const MENSAGENS: Record<TipoNotificacao, (contexto: ContextoDaMensagem) =
    * entrega do lembrete do dia, que e o aviso que de fato importa.
    */
   [TipoNotificacao.ATENDIMENTO_OFERTADO]: ({ nome, dados, fuso, link, demaisSessoes }) => ({
-    assunto: `Novo horario de monitoria disponivel: ${dados.disciplina}`,
+    assunto: `Novo horário de monitoria disponível: ${dados.disciplina}`,
     corpo: [
-      `Ola, ${nome}.`,
+      `Olá, ${nome}.`,
       '',
       demaisSessoes
-        ? 'Foi aberta uma serie de horarios de monitoria na sua disciplina. O primeiro:'
-        : 'Foi aberto um novo horario de monitoria na sua disciplina:',
+        ? 'Foi aberta uma série de horários de monitoria na sua disciplina. O primeiro:'
+        : 'Foi aberto um novo horário de monitoria na sua disciplina:',
       '',
       ...blocoDoAtendimento(dados, fuso),
       ...(demaisSessoes
         ? [
             '',
             demaisSessoes === 1
-              ? 'E mais 1 sessao na mesma faixa de horario.'
-              : `E mais ${demaisSessoes} sessoes na mesma faixa de horario.`,
+              ? 'E mais 1 sessão na mesma faixa de horário.'
+              : `E mais ${demaisSessoes} sessões na mesma faixa de horário.`,
           ]
         : []),
       '',
-      'As vagas sao limitadas.',
+      'As vagas são limitadas.',
       ...acesse(demaisSessoes ? 'Ver a agenda da monitoria' : 'Inscrever-se', link),
     ].join('\n'),
   }),
@@ -327,13 +327,13 @@ export const MENSAGENS: Record<TipoNotificacao, (contexto: ContextoDaMensagem) =
   [TipoNotificacao.AVALIACAO_PENDENTE]: ({ nome, dados, fuso, link }) => ({
     assunto: `Como foi o atendimento de ${dados.disciplina}?`,
     corpo: [
-      `Ola, ${nome}.`,
+      `Olá, ${nome}.`,
       '',
-      'Seu atendimento foi concluido:',
+      'Seu atendimento foi concluído:',
       '',
       ...blocoDoAtendimento(dados, fuso),
       '',
-      'A avaliacao leva menos de um minuto e e o que permite acompanhar a',
+      'A avaliação leva menos de um minuto e é o que permite acompanhar a',
       'qualidade da monitoria.',
       ...acesse('Avaliar atendimento', link),
     ].join('\n'),
@@ -341,27 +341,37 @@ export const MENSAGENS: Record<TipoNotificacao, (contexto: ContextoDaMensagem) =
 
   /** Nao fala de atendimento: o unico tipo cujo bloco nao se aplica. */
   [TipoNotificacao.MONITOR_HABILITADO]: ({ nome, dados, link, inscricoesCanceladas }) => ({
-    assunto: `Voce agora e monitor(a) de ${dados.disciplina}`,
+    assunto: `Você agora é monitor(a) de ${dados.disciplina}`,
     corpo: [
-      `Ola, ${nome}.`,
+      `Olá, ${nome}.`,
       '',
-      `Voce foi habilitado(a) como MONITOR(A) na monitoria de ${dados.disciplina}.`,
+      `Você foi habilitado(a) como MONITOR(A) na monitoria de ${dados.disciplina}.`,
       ...(inscricoesCanceladas
         ? [
             '',
+            /**
+             * Singular e plural em DUAS linhas cada, e nao um sufixo comum.
+             *
+             * O texto anterior fechava sempre com "foi cancelada", inclusive na
+             * ramificacao plural ("suas inscricoes em 3 atendimentos ... foi
+             * cancelada") — erro de concordancia que so aparece quando a
+             * promocao atinge mais de um atendimento.
+             */
             inscricoesCanceladas === 1
-              ? 'Como voce passou de monitorado(a) a monitor(a), sua inscricao em 1 atendimento'
-              : `Como voce passou de monitorado(a) a monitor(a), suas inscricoes em ${inscricoesCanceladas} atendimentos`,
-            'desta monitoria foi cancelada — agora voce conduz as sessoes, em vez de assistir.',
+              ? 'Como você passou de monitorado(a) a monitor(a), sua inscrição em 1 atendimento'
+              : `Como você passou de monitorado(a) a monitor(a), suas inscrições em ${inscricoesCanceladas} atendimentos`,
+            inscricoesCanceladas === 1
+              ? 'desta monitoria foi cancelada — agora você conduz as sessões, em vez de assistir.'
+              : 'desta monitoria foram canceladas — agora você conduz as sessões, em vez de assistir.',
           ]
         : []),
       '',
-      'Proximos passos na plataforma:',
+      'Próximos passos na plataforma:',
       '  1. declare sua disponibilidade semanal;',
-      '  2. abra horarios de atendimento ou aguarde solicitacoes;',
+      '  2. abra horários de atendimento ou aguarde solicitações;',
       '  3. publique materiais de apoio, se quiser.',
       '',
-      'Sem disponibilidade declarada, ninguem consegue agendar com voce.',
+      'Sem disponibilidade declarada, ninguém consegue agendar com você.',
       ...acesse('Acessar a monitoria', link),
     ].join('\n'),
   }),

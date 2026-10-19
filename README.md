@@ -1515,4 +1515,5 @@ pública e boletim em PDF).
 | `npm run db:migrate` · `db:seed` | migrations e dados de desenvolvimento |
 | `npm run criar-professor` | cria o primeiro professor fora da API (bootstrap) |
 | `npm run enviar-lembretes` | dispara as rotinas de notificação agora, sem esperar o agendador |
+| `npm run ver-emails` | imprime todos os textos de e-mail já renderizados, com as variações de singular/plural — para revisar redação sem enviar nada |
 | `npm run lint` · `format` | ESLint (com fix) e Prettier |

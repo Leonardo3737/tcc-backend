@@ -115,7 +115,7 @@ export class RecuperacaoSenhaService {
 
     void this.emailService.enviar({
       para: [{ email: usuario.email, nome: usuario.nome }],
-      assunto: 'Codigo de recuperacao de senha',
+      assunto: 'Código de recuperação de senha',
       texto: this.corpoEmTexto(usuario.nome, codigo),
       html: this.corpoEmHtml(usuario.nome, codigo),
     });
@@ -199,15 +199,15 @@ export class RecuperacaoSenhaService {
 
   private corpoEmTexto(nome: string, codigo: string): string {
     return [
-      `Ola, ${nome}.`,
+      `Olá, ${nome}.`,
       '',
       'Recebemos um pedido para redefinir a senha da sua conta na plataforma de monitoria.',
       '',
-      `Seu codigo de confirmacao e: ${codigo}`,
+      `Seu código de confirmação é: ${codigo}`,
       '',
-      `O codigo vale por ${MINUTOS_DE_VALIDADE} minutos e so pode ser usado uma vez.`,
+      `O código vale por ${MINUTOS_DE_VALIDADE} minutos e só pode ser usado uma vez.`,
       '',
-      'Se voce nao pediu esta troca, ignore esta mensagem: sua senha continua a mesma.',
+      'Se você não pediu esta troca, ignore esta mensagem: sua senha continua a mesma.',
     ].join('\n');
   }
 
@@ -217,11 +217,11 @@ export class RecuperacaoSenhaService {
     const nomeSeguro = escaparHtml(nome);
 
     return [
-      `<p>Ola, ${nomeSeguro}.</p>`,
+      `<p>Olá, ${nomeSeguro}.</p>`,
       '<p>Recebemos um pedido para redefinir a senha da sua conta na plataforma de monitoria.</p>',
-      `<p>Seu codigo de confirmacao e: <strong style="font-size:20px">${codigo}</strong></p>`,
-      `<p>O codigo vale por ${MINUTOS_DE_VALIDADE} minutos e so pode ser usado uma vez.</p>`,
-      '<p>Se voce nao pediu esta troca, ignore esta mensagem: sua senha continua a mesma.</p>',
+      `<p>Seu código de confirmação é: <strong style="font-size:20px">${codigo}</strong></p>`,
+      `<p>O código vale por ${MINUTOS_DE_VALIDADE} minutos e só pode ser usado uma vez.</p>`,
+      '<p>Se você não pediu esta troca, ignore esta mensagem: sua senha continua a mesma.</p>',
     ].join('\n');
   }
 
