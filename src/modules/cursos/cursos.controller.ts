@@ -8,10 +8,10 @@ import {
   ApiTags,
 } from '@nestjs/swagger';
 
+import { ApiRespostaPaginada } from '../../common/decorators/api-resposta-paginada.decorator';
 import { Perfis } from '../../common/decorators/perfis.decorator';
 import { Publico } from '../../common/decorators/publico.decorator';
 import { RespostaErro } from '../../common/dto/resposta-erro.dto';
-import { ApiRespostaPaginada } from '../../common/decorators/api-resposta-paginada.decorator';
 import { RespostaPaginada } from '../../common/dto/resposta-paginada.dto';
 import { PerfilUsuario } from '../../common/enums/perfil-usuario.enum';
 import { CursosService } from './cursos.service';
@@ -63,7 +63,7 @@ export class CursosController {
   @Get()
   @ApiOperation({ summary: 'Lista cursos do catalogo. PUBLICO (alimenta o formulario de edital).' })
   @ApiRespostaPaginada(CursoRespostaDto)
-  listar(@Query() filtro: FiltroCursosDto): Promise<RespostaPaginada<CursoRespostaDto>> {
+  listar(@Query() filtro: FiltroCursosDto): Promise<RespostaPaginada<CursoRespostaDto>> {    
     return this.cursosService.listar(filtro);
   }
 

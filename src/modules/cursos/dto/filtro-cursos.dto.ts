@@ -1,5 +1,5 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
-import { Transform, Type } from 'class-transformer';
+import { Transform } from 'class-transformer';
 import { IsBoolean, IsOptional, IsString, MaxLength } from 'class-validator';
 
 import { PaginacaoDto } from '../../../common/dto/paginacao.dto';
@@ -14,7 +14,6 @@ export class FiltroCursosDto extends PaginacaoDto {
 
   @ApiPropertyOptional({ description: 'Filtra por cursos ativos ou inativos.' })
   @IsOptional()
-  @Type(() => Boolean)
   @Transform(({ value }) => (value === 'true' ? true : value === 'false' ? false : value))
   @IsBoolean({ message: 'ativo deve ser booleano' })
   ativo?: boolean;

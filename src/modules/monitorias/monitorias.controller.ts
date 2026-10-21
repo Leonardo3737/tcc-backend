@@ -41,10 +41,21 @@ import { MonitoriasService } from './monitorias.service';
 export class MonitoriasController {
   constructor(private readonly monitoriasService: MonitoriasService) {}
 
+  /**
+   * O `professorId` e injetado AQUI, com o id do token.
+   *
+   * E este ponto que sustenta "por esta rota, a monitoria e sempre de quem a
+   * criou". O campo existe no DTO sem decorator de validacao, entao o cliente
+   * nao consegue manda-lo — tentar devolve 400. Mover a decisao para o
+   * controller foi o que permitiu a aprovacao de candidatura criar a monitoria
+   * no nome do professor que o candidato indicou, sem afrouxar esta rota.
+   */
   @Post()
   @Perfis(PerfilUsuario.PROFESSOR)
   @ApiOperation({
     summary: 'Cria uma monitoria. O professor responsavel e sempre o autenticado.',
+    description:
+      'Nao aceita `professorId`: o responsavel vem do token. Mandar o campo devolve 400.',
   })
   @ApiCreatedResponse({ type: MonitoriaRespostaDto })
   @ApiConflictResponse({
@@ -55,7 +66,7 @@ export class MonitoriasController {
     @Body() dto: CriarMonitoriaDto,
     @UsuarioAtual() usuario: UsuarioAutenticado,
   ): Promise<MonitoriaRespostaDto> {
-    return this.monitoriasService.criar(dto, usuario);
+    return this.monitoriasService.criar({ ...dto, professorId: usuario.id });
   }
 
   /** Catalogo publico de ofertas: o aluno precisa descobrir onde se inscrever. */

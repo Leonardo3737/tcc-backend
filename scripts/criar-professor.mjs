@@ -13,7 +13,7 @@
  *
  * Uso (o banco precisa estar migrado):
  *
- *   npm run criar-professor -- --nome "Joao Ribeiro" --email joao@ufx.edu.br
+ *   npm run criar-professor -- --nome "Professor" --email professor@gmail.com --senha 123123123
  *
  * A senha pode vir em --senha ou em PROFESSOR_SENHA. Omitindo as duas, o script
  * gera uma aleatoria e a imprime UMA vez — preferivel, porque a senha nao fica

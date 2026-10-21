@@ -8,7 +8,7 @@ import {
 import { ConfigService } from '@nestjs/config';
 import { InjectConnection, InjectModel } from '@nestjs/sequelize';
 import { createHash } from 'node:crypto';
-import { Op, Order, col } from 'sequelize';
+import { Op, Order, QueryTypes, col } from 'sequelize';
 import { Sequelize } from 'sequelize-typescript';
 
 import { RespostaPaginada } from '../../common/dto/resposta-paginada.dto';
@@ -22,8 +22,13 @@ import { Aluno } from '../usuarios/entities/aluno.model';
 import { Professor } from '../usuarios/entities/professor.model';
 import { Usuario } from '../usuarios/entities/usuario.model';
 import { CriarInscricaoDto } from './dto/criar-inscricao.dto';
-import { CampoOrdenacaoInscricao, FiltroInscricoesDto } from './dto/filtro-inscricoes.dto';
+import {
+  CampoOrdenacaoInscricao,
+  FiltroInscricoesDto,
+  FiltroResumoInscricoesDto,
+} from './dto/filtro-inscricoes.dto';
 import { InscricaoConfirmacaoDto, InscricaoRespostaDto } from './dto/inscricao-resposta.dto';
+import { ResumoPorDisciplinaDto } from './dto/resumo-por-disciplina.dto';
 import { EditaisService } from './editais.service';
 import { Boletim } from './entities/boletim.model';
 import { Edital } from './entities/edital.model';
@@ -422,6 +427,226 @@ export class InscricoesEditalService {
       filtro.pagina,
       filtro.limite,
     );
+  }
+
+  /**
+   * RESUMO por disciplina: uma linha por disciplina que recebeu candidatura.
+   *
+   * Existe porque cada disciplina do edital vira UMA monitoria, e a banca
+   * trabalha disciplina por disciplina — nao numa lista corrida. Sem isto, o
+   * cliente so teria duas saidas, as duas ruins: agrupar no navegador o que
+   * cabe em uma pagina, o que parte um grupo ao meio no limite de 100 e exibe
+   * um ranking incompleto com aparencia de completo; ou descobrir as
+   * disciplinas por tentativa.
+   *
+   * O CONTRATO com o endpoint plano: este resumo e o cabecalho, e
+   * `GET /inscricoes?editalId=...&disciplinaId=...` e o conteudo. Para o
+   * cabecalho nao mentir, os dois tem de aceitar os MESMOS filtros — e e por
+   * isso que `FiltroResumoInscricoesDto` deriva de `FiltroInscricoesDto` em vez
+   * de ser escrito a parte.
+   *
+   * SQL cru, como em AnalyticsService. Nao e preferencia: `findAndCountAll` com
+   * `group` devolve `count` como ARRAY de grupos em vez de numero, e montar
+   * agregados por ORM aqui renderia menos legibilidade por mais surpresa.
+   *
+   * SEM paginacao, deliberadamente. O resultado e limitado pelo catalogo de
+   * disciplinas da instituicao — dezenas de linhas minusculas —, nao pelo
+   * numero de candidatos. E como nao ha paginacao, reordenar no cliente e
+   * correto aqui, diferente da lista de candidatos.
+   */
+  async resumoPorDisciplina(filtro: FiltroResumoInscricoesDto): Promise<ResumoPorDisciplinaDto[]> {
+    const { onde, valores } = this.condicoesDoResumo(filtro);
+
+    /**
+     * `JOIN editais` entra SEMPRE, mesmo sem filtro de ano/semestre.
+     *
+     * A FK e NOT NULL e a relacao e para um, entao o join nao muda nem o
+     * conjunto de linhas nem a contagem — e mantem a consulta com uma forma so,
+     * em vez de duas variantes que precisariam ser testadas separadamente.
+     *
+     * `COUNT(i.media)` conta os NAO NULOS: e exatamente "quantos dao para
+     * ranquear". `MAX(i.media)` ignora nulos pela mesma razao, entao devolve
+     * nulo so quando ninguem tem media — nunca zero.
+     */
+    const linhas = (await this.sequelize.query(
+      `
+      SELECT
+        d.id                AS disciplina_id,
+        d.codigo            AS disciplina_codigo,
+        d.nome              AS disciplina_nome,
+        COUNT(*)::int       AS total_inscricoes,
+        COUNT(i.media)::int AS com_media,
+        MAX(i.media)        AS melhor_media,
+        /**
+         * Os editais do grupo, para a segunda consulta saber onde procurar a
+         * monitoria. Agregado simples na lista do SELECT: nao multiplica linha
+         * nem altera as contagens acima.
+         */
+        ARRAY_AGG(DISTINCT i.edital_id) AS editais
+      FROM inscricoes_edital i
+      JOIN disciplinas d ON d.id = i.disciplina_id
+      JOIN editais e     ON e.id = i.edital_id
+      ${onde}
+      GROUP BY d.id, d.codigo, d.nome
+      ORDER BY d.nome ASC;
+      `,
+      { replacements: valores, type: QueryTypes.SELECT },
+    )) as unknown as (Record<string, string | null> & { editais: string[] })[];
+
+    /**
+     * Segunda consulta, com as disciplinas e os editais que a primeira trouxe.
+     * Nao cresce com o total de candidaturas: recebe uma chave por disciplina.
+     */
+    const monitorias = await this.monitoriasDoEdital(
+      linhas.map((linha) => linha.disciplina_id as string),
+      [...new Set(linhas.flatMap((linha) => linha.editais))],
+    );
+
+    return linhas.map((linha) =>
+      ResumoPorDisciplinaDto.deLinha(linha, monitorias.get(linha.disciplina_id as string) ?? null),
+    );
+  }
+
+  /**
+   * Quais disciplinas do recorte JA tem monitoria vinda do edital, e com
+   * quantos monitores.
+   *
+   * Consulta SEPARADA, nao um join na agregada — e por um motivo concreto, nao
+   * estetico: juntar `monitorias` e `monitoria_participantes` na consulta
+   * agrupada multiplicaria as linhas de inscricao por monitor e estragaria
+   * `COUNT(*)`, que e o total de candidaturas. Seria um erro silencioso: os
+   * totais ficariam inflados sem nada falhar.
+   *
+   * O recorte usa os editais que o proprio resumo encontrou (`array_agg` na
+   * consulta agregada), e nao o filtro recebido. Assim a resposta e correta
+   * tambem quando o resumo e pedido sem `editalId` — o flag passa a significar
+   * "alguma monitoria vinda de um dos editais em questao".
+   *
+   * `edital_id IS NOT NULL` e o que torna o flag honesto: uma monitoria que o
+   * professor abriu a mao no semestre passado nao deve acender a marca de
+   * "disciplina ja resolvida por este edital".
+   */
+  private async monitoriasDoEdital(
+    disciplinas: string[],
+    editais: string[],
+  ): Promise<Map<string, { id: string; monitores: number }>> {
+    if (disciplinas.length === 0 || editais.length === 0) {
+      return new Map();
+    }
+
+    const linhas = (await this.sequelize.query(
+      `
+      SELECT
+        m.disciplina_id,
+        m.id AS monitoria_id,
+        COUNT(mp.id) FILTER (
+          WHERE mp.papel = 'MONITOR' AND mp.status = 'ATIVO'
+        )::int AS monitores
+      FROM monitorias m
+      LEFT JOIN monitoria_participantes mp ON mp.monitoria_id = m.id
+      WHERE m.edital_id IS NOT NULL
+        AND m.edital_id IN (:editais)
+        AND m.disciplina_id IN (:disciplinas)
+      GROUP BY m.disciplina_id, m.id
+      ORDER BY monitores DESC, m.created_at ASC;
+      `,
+      { replacements: { editais, disciplinas }, type: QueryTypes.SELECT },
+    )) as unknown as { disciplina_id: string; monitoria_id: string; monitores: number }[];
+
+    /**
+     * `ORDER BY monitores DESC` + primeira vitoria no Map: havendo mais de uma
+     * monitoria da mesma disciplina no recorte (professores diferentes, que
+     * `uq_monitoria_oferta` permite), a que JA tem monitor e a que descreve o
+     * estado do grupo. Pegar a mais antiga sem olhar os monitores poderia
+     * mostrar "pendente" com um monitor ja habilitado em outra.
+     */
+    const porDisciplina = new Map<string, { id: string; monitores: number }>();
+
+    for (const linha of linhas) {
+      if (!porDisciplina.has(linha.disciplina_id)) {
+        porDisciplina.set(linha.disciplina_id, {
+          id: linha.monitoria_id,
+          monitores: Number(linha.monitores),
+        });
+      }
+    }
+
+    return porDisciplina;
+  }
+
+  /**
+   * Traduz o filtro em fragmentos de SQL e valores separados.
+   *
+   * A separacao e a parte que importa: os fragmentos sao literais escritos
+   * AQUI, no codigo, e nenhum pedaco deles vem da requisicao; o que vem do
+   * cliente sao apenas os VALORES, que saem por `replacements` e nunca por
+   * interpolacao. Concatenar valor em texto de consulta e o caminho classico
+   * para injecao, e e o motivo de esta funcao existir em vez de uma montagem
+   * inline.
+   *
+   * Cada condicao acrescenta a chave correspondente no mesmo `if`. Se as duas
+   * metades se separassem, o Sequelize lancaria na hora ("Named parameter has
+   * no value") em vez de produzir consulta silenciosamente errada.
+   */
+  private condicoesDoResumo(filtro: FiltroResumoInscricoesDto): {
+    onde: string;
+    valores: Record<string, unknown>;
+  } {
+    const condicoes: string[] = [];
+    const valores: Record<string, unknown> = {};
+
+    if (filtro.editalId) {
+      condicoes.push('i.edital_id = :editalId');
+      valores.editalId = filtro.editalId;
+    }
+
+    if (filtro.cursoId) {
+      condicoes.push('i.curso_id = :cursoId');
+      valores.cursoId = filtro.cursoId;
+    }
+
+    /**
+     * Filtrar por disciplina em uma consulta AGRUPADA por disciplina nao e
+     * contraditorio: devolve um grupo so, que e o cabecalho daquele grupo
+     * isolado. Serve a tela que ja esta dentro de uma disciplina.
+     */
+    if (filtro.disciplinaId) {
+      condicoes.push('i.disciplina_id = :disciplinaId');
+      valores.disciplinaId = filtro.disciplinaId;
+    }
+
+    if (filtro.turno) {
+      condicoes.push('i.turno = :turno');
+      valores.turno = filtro.turno;
+    }
+
+    if (filtro.professorId) {
+      condicoes.push('i.professor_id = :professorId');
+      valores.professorId = filtro.professorId;
+    }
+
+    if (filtro.busca) {
+      condicoes.push(
+        '(i.nome_completo ILIKE :busca OR i.matricula ILIKE :busca OR i.email ILIKE :busca)',
+      );
+      valores.busca = `%${filtro.busca}%`;
+    }
+
+    // Do EDITAL, nao da inscricao — mesma semantica do endpoint plano.
+    if (filtro.ano !== undefined) {
+      condicoes.push('e.ano = :ano');
+      valores.ano = filtro.ano;
+    }
+
+    if (filtro.semestre !== undefined) {
+      condicoes.push('e.semestre = :semestre');
+      valores.semestre = filtro.semestre;
+    }
+
+    return {
+      onde: condicoes.length > 0 ? `WHERE ${condicoes.join(' AND ')}` : '',
+      valores,
+    };
   }
 
   async detalhar(id: string): Promise<InscricaoRespostaDto> {

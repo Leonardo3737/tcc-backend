@@ -27,6 +27,18 @@ export class MonitoriaRespostaDto {
 
   @ApiPropertyOptional({ nullable: true }) descricao: string | null;
   @ApiProperty({ enum: StatusMonitoria }) status: StatusMonitoria;
+  /**
+   * Procedencia: o edital que originou a monitoria, quando houve um.
+   *
+   * Nulo significa "criada a mao", nao "dado faltando" — e a maioria.
+   */
+  @ApiPropertyOptional({
+    nullable: true,
+    format: 'uuid',
+    description: 'Edital que originou a monitoria. Nulo quando foi criada diretamente.',
+  })
+  editalId: string | null;
+
   @ApiPropertyOptional({ nullable: true, format: 'date' }) dataInicio: string | null;
   @ApiPropertyOptional({ nullable: true, format: 'date' }) dataFim: string | null;
 
@@ -74,6 +86,7 @@ export class MonitoriaRespostaDto {
     dto.periodo = `${monitoria.ano}/${monitoria.semestre}`;
     dto.descricao = monitoria.descricao;
     dto.status = monitoria.status;
+    dto.editalId = monitoria.editalId ?? null;
     dto.dataInicio = monitoria.dataInicio;
     dto.dataFim = monitoria.dataFim;
 

@@ -43,6 +43,22 @@ export class Monitoria extends Model {
   @Column({ type: DataType.TEXT, allowNull: true })
   descricao: string | null;
 
+  /**
+   * PROCEDENCIA opcional: o edital que originou esta monitoria.
+   *
+   * Nula na maioria dos casos, e isso nao e falta de dado — e o que significa
+   * "criada a mao, fora de processo seletivo", que continua sendo um caminho
+   * valido (`POST /monitorias`). Preenchida, diz que a monitoria nasceu da
+   * aprovacao de uma candidatura, e e o que permite a banca ver, no resumo do
+   * edital, de quais disciplinas ela ja cadastrou monitoria.
+   *
+   * Nao ha associacao `@BelongsTo` aqui de proposito: nada precisa carregar o
+   * edital junto da monitoria, e declarar o lado inverso em `Edital` fecharia um
+   * ciclo de import entre os dois modulos sem nenhum consumidor.
+   */
+  @Column({ type: DataType.UUID, allowNull: true })
+  editalId: string | null;
+
   @Default(StatusMonitoria.PLANEJADA)
   @Column({ type: DataType.STRING(20), allowNull: false })
   status: StatusMonitoria;

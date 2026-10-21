@@ -532,6 +532,9 @@ function montarInscricoes(
 
   const emailService = { enviar: jest.fn().mockResolvedValue(emailAceito) };
 
+  /** O resumo por disciplina e SQL cru: o que se inspeciona e esta chamada. */
+  const query = jest.fn().mockResolvedValue([]);
+
   let rollback = false;
 
   const service = new InscricoesEditalService(
@@ -548,6 +551,7 @@ function montarInscricoes(
           throw erro;
         }
       }),
+      query,
     } as never,
     { exigirAbertoParaInscricao: jest.fn().mockResolvedValue({ ...EDITAL }) } as never,
     { exigirAtivo: jest.fn().mockResolvedValue({ id: CURSO, nome: 'Computacao' }) } as never,
@@ -568,6 +572,7 @@ function montarInscricoes(
     inscricaoModel,
     boletimModel,
     emailService,
+    query,
     criadas,
     boletinsCriados,
     houveRollback: () => rollback,
@@ -922,6 +927,330 @@ describe('InscricoesEditalService.listar — ordenacao e privacidade', () => {
 
     expect(doEdital).toMatchObject({ where: { ano: 2026, semestre: 2 }, required: true });
     expect(opcoes.where).not.toHaveProperty('ano');
+  });
+});
+
+describe('InscricoesEditalService.resumoPorDisciplina', () => {
+  /** O SQL e um literal do codigo; o que vem do cliente sai por replacements. */
+  function sqlEValores(query: jest.Mock) {
+    const [sql, opcoes] = query.mock.calls[0];
+    return { sql: sql as string, valores: (opcoes as { replacements: object }).replacements };
+  }
+
+  const linha = {
+    disciplina_id: DISCIPLINA,
+    disciplina_codigo: 'BAN001',
+    disciplina_nome: 'Banco de Dados',
+    total_inscricoes: '7',
+    com_media: '5',
+    melhor_media: '8.85',
+    /** `ARRAY_AGG(DISTINCT i.edital_id)` da consulta agregada. */
+    editais: ['ed-1'],
+  };
+
+  /**
+   * O resumo faz DUAS consultas: a agregada e a que procura a monitoria vinda
+   * do edital. Encadear `mockResolvedValueOnce` mantem as duas distinguiveis —
+   * um `mockResolvedValue` unico faria a segunda receber as linhas da primeira
+   * e os testes passariam lendo campos que nao existem.
+   */
+  function responderCom(
+    query: jest.Mock,
+    agregada: Record<string, unknown>[],
+    monitorias: Record<string, unknown>[] = [],
+  ) {
+    query.mockResolvedValueOnce(agregada).mockResolvedValueOnce(monitorias);
+  }
+
+  it('agrupa por disciplina e ordena pelo nome', async () => {
+    const { service, query } = montarInscricoes();
+
+    await service.resumoPorDisciplina({} as never);
+
+    const { sql } = sqlEValores(query);
+
+    expect(sql).toContain('GROUP BY d.id, d.codigo, d.nome');
+    expect(sql).toContain('ORDER BY d.nome ASC');
+  });
+
+  /**
+   * `COUNT(i.media)` e `MAX(i.media)` ignoram nulos — e e assim que "quantos
+   * dao para ranquear" e "melhor media" saem certos sem nenhum `if`.
+   */
+  it('conta a media pelos nao nulos e nao inventa zero', async () => {
+    const { service, query } = montarInscricoes();
+
+    await service.resumoPorDisciplina({} as never);
+
+    const { sql } = sqlEValores(query);
+
+    expect(sql).toContain('COUNT(i.media)');
+    expect(sql).toContain('MAX(i.media)');
+  });
+
+  it('sem filtro, nao emite WHERE', async () => {
+    const { service, query } = montarInscricoes();
+
+    await service.resumoPorDisciplina({} as never);
+
+    const { sql, valores } = sqlEValores(query);
+
+    expect(sql).not.toContain('WHERE');
+    expect(valores).toEqual({});
+  });
+
+  /**
+   * A afirmacao de seguranca: o valor do cliente NUNCA entra no texto da
+   * consulta. Se alguem trocar `:editalId` por interpolacao, o id aparece no
+   * SQL e este teste falha.
+   */
+  it('passa os valores por replacements, nunca interpolados no SQL', async () => {
+    const { service, query } = montarInscricoes();
+
+    await service.resumoPorDisciplina({
+      editalId: 'ed-1',
+      cursoId: CURSO,
+      disciplinaId: DISCIPLINA,
+      turno: Turno.NOTURNO,
+      professorId: PROFESSOR,
+      busca: "x'; DROP TABLE inscricoes_edital; --",
+      ano: 2026,
+      semestre: 2,
+    } as never);
+
+    const { sql, valores } = sqlEValores(query);
+
+    expect(sql).not.toContain('ed-1');
+    expect(sql).not.toContain('DROP TABLE');
+    expect(valores).toEqual({
+      editalId: 'ed-1',
+      cursoId: CURSO,
+      disciplinaId: DISCIPLINA,
+      turno: Turno.NOTURNO,
+      professorId: PROFESSOR,
+      busca: "%x'; DROP TABLE inscricoes_edital; --%",
+      ano: 2026,
+      semestre: 2,
+    });
+  });
+
+  /**
+   * O resumo e o cabecalho de uma lista que o cliente abre depois. Se ele
+   * ignorasse um filtro que a listagem aplica, o total mostrado seria maior que
+   * o conteudo do grupo — e o cabecalho seria o mentiroso.
+   */
+  it('aplica os MESMOS filtros da listagem plana', async () => {
+    const { service, query } = montarInscricoes();
+
+    await service.resumoPorDisciplina({
+      editalId: 'ed-1',
+      cursoId: CURSO,
+      disciplinaId: DISCIPLINA,
+      turno: Turno.MATUTINO,
+      professorId: PROFESSOR,
+      busca: 'maria',
+      ano: 2026,
+      semestre: 2,
+    } as never);
+
+    const { sql } = sqlEValores(query);
+
+    for (const condicao of [
+      'i.edital_id = :editalId',
+      'i.curso_id = :cursoId',
+      'i.disciplina_id = :disciplinaId',
+      'i.turno = :turno',
+      'i.professor_id = :professorId',
+      'e.ano = :ano',
+      'e.semestre = :semestre',
+    ]) {
+      expect(sql).toContain(condicao);
+    }
+
+    expect(sql).toContain(
+      '(i.nome_completo ILIKE :busca OR i.matricula ILIKE :busca OR i.email ILIKE :busca)',
+    );
+  });
+
+  /** `ano` e `semestre` sao do EDITAL: exigem o JOIN, que entra sempre. */
+  it('junta editais mesmo sem filtro de periodo, para a consulta ter uma forma so', async () => {
+    const { service, query } = montarInscricoes();
+
+    await service.resumoPorDisciplina({ editalId: 'ed-1' } as never);
+
+    expect(sqlEValores(query).sql).toContain('JOIN editais e');
+  });
+
+  it('converte os agregados e deriva semMedia', async () => {
+    const { service, query } = montarInscricoes();
+    responderCom(query, [linha]);
+
+    const [resumo] = await service.resumoPorDisciplina({} as never);
+
+    expect(resumo).toEqual({
+      disciplina: { id: DISCIPLINA, codigo: 'BAN001', nome: 'Banco de Dados' },
+      totalInscricoes: 7,
+      comMedia: 5,
+      semMedia: 2,
+      melhorMedia: 8.85,
+      monitoriaCadastrada: false,
+      monitoriaId: null,
+      monitoresHabilitados: 0,
+    });
+  });
+
+  /** Ninguem com nota na disciplina: melhor media e NULA, nunca zero. */
+  it('melhorMedia nula quando nenhum candidato tem media', async () => {
+    const { service, query } = montarInscricoes();
+    responderCom(query, [{ ...linha, total_inscricoes: '3', com_media: '0', melhor_media: null }]);
+
+    const [resumo] = await service.resumoPorDisciplina({} as never);
+
+    expect(resumo.melhorMedia).toBeNull();
+    expect(resumo.melhorMedia).not.toBe(0);
+    expect(resumo.semMedia).toBe(3);
+  });
+
+  /**
+   * O flag que a tela usa para marcar o grupo como concluido exige as DUAS
+   * coisas: monitoria vinda do edital E monitor habilitado nela.
+   */
+  it('marca a disciplina como cadastrada quando ha monitoria COM monitor', async () => {
+    const { service, query } = montarInscricoes();
+    responderCom(
+      query,
+      [linha],
+      [{ disciplina_id: DISCIPLINA, monitoria_id: 'mon-1', monitores: 2 }],
+    );
+
+    const [resumo] = await service.resumoPorDisciplina({ editalId: 'ed-1' } as never);
+
+    expect(resumo.monitoriaCadastrada).toBe(true);
+    expect(resumo.monitoriaId).toBe('mon-1');
+    expect(resumo.monitoresHabilitados).toBe(2);
+  });
+
+  /**
+   * Monitoria criada e monitor pendente e o estado parcial que uma aprovacao
+   * interrompida deixa. NAO pode contar como resolvido: e justamente o grupo
+   * que precisa de atencao, e `monitoriaId` preenchido permite a tela dizer
+   * "retome esta".
+   */
+  it('monitoria SEM monitor nao conta como cadastrada', async () => {
+    const { service, query } = montarInscricoes();
+    responderCom(
+      query,
+      [linha],
+      [{ disciplina_id: DISCIPLINA, monitoria_id: 'mon-1', monitores: 0 }],
+    );
+
+    const [resumo] = await service.resumoPorDisciplina({ editalId: 'ed-1' } as never);
+
+    expect(resumo.monitoriaCadastrada).toBe(false);
+    expect(resumo.monitoriaId).toBe('mon-1');
+    expect(resumo.monitoresHabilitados).toBe(0);
+  });
+
+  it('disciplina sem monitoria vem com os tres campos zerados', async () => {
+    const { service, query } = montarInscricoes();
+    responderCom(query, [linha], []);
+
+    const [resumo] = await service.resumoPorDisciplina({ editalId: 'ed-1' } as never);
+
+    expect(resumo.monitoriaCadastrada).toBe(false);
+    expect(resumo.monitoriaId).toBeNull();
+    expect(resumo.monitoresHabilitados).toBe(0);
+  });
+
+  /**
+   * A procura e restrita a monitorias VINDAS de edital. Sem isto, uma monitoria
+   * que o professor abriu a mao acenderia a marca de "resolvida pelo edital".
+   */
+  it('procura so monitorias com edital_id, nos editais do recorte', async () => {
+    const { service, query } = montarInscricoes();
+    responderCom(query, [linha]);
+
+    await service.resumoPorDisciplina({ editalId: 'ed-1' } as never);
+
+    const [sql, opcoes] = query.mock.calls[1];
+
+    expect(sql).toContain('m.edital_id IS NOT NULL');
+    expect(sql).toContain('m.edital_id IN (:editais)');
+    expect(sql).toContain("mp.papel = 'MONITOR' AND mp.status = 'ATIVO'");
+    expect((opcoes as { replacements: object }).replacements).toEqual({
+      editais: ['ed-1'],
+      disciplinas: [DISCIPLINA],
+    });
+  });
+
+  /**
+   * Juntar monitorias na consulta AGREGADA multiplicaria as inscricoes por
+   * monitor e inflaria `total_inscricoes` — erro silencioso, que nada faria
+   * falhar. Por isso sao duas consultas, e a primeira nao menciona as tabelas
+   * de monitoria.
+   */
+  it('a consulta agregada nao junta monitorias', async () => {
+    const { service, query } = montarInscricoes();
+    responderCom(query, [linha]);
+
+    await service.resumoPorDisciplina({ editalId: 'ed-1' } as never);
+
+    const [sqlAgregada] = query.mock.calls[0];
+
+    expect(sqlAgregada).not.toContain('monitoria_participantes');
+    expect(sqlAgregada).not.toContain('JOIN monitorias');
+  });
+
+  /** Nada a procurar: a segunda consulta nem sai. */
+  it('nao faz a segunda consulta quando nao ha grupo', async () => {
+    const { service, query } = montarInscricoes();
+    responderCom(query, []);
+
+    await service.resumoPorDisciplina({ editalId: 'ed-1' } as never);
+
+    expect(query).toHaveBeenCalledTimes(1);
+  });
+
+  /**
+   * `uq_monitoria_oferta` permite duas monitorias da mesma disciplina no mesmo
+   * periodo quando os professores diferem. Entre elas, a que descreve o estado
+   * do grupo e a que JA tem monitor — mostrar "pendente" com um monitor
+   * habilitado em outra seria falso.
+   */
+  it('havendo duas monitorias da disciplina, prefere a que tem monitor', async () => {
+    const { service, query } = montarInscricoes();
+    responderCom(
+      query,
+      [linha],
+      [
+        { disciplina_id: DISCIPLINA, monitoria_id: 'com-monitor', monitores: 1 },
+        { disciplina_id: DISCIPLINA, monitoria_id: 'sem-monitor', monitores: 0 },
+      ],
+    );
+
+    const [resumo] = await service.resumoPorDisciplina({ editalId: 'ed-1' } as never);
+
+    expect(resumo.monitoriaId).toBe('com-monitor');
+    expect(resumo.monitoriaCadastrada).toBe(true);
+  });
+
+  it('recorte sem candidatura devolve lista vazia, nao erro', async () => {
+    const { service } = montarInscricoes();
+
+    await expect(service.resumoPorDisciplina({ editalId: 'ed-1' } as never)).resolves.toEqual([]);
+  });
+
+  /**
+   * O resumo nao toca a tabela do binario. Ele conta candidaturas; o PDF tem
+   * rota propria e nao deve aparecer em consulta agregada nenhuma.
+   */
+  it('nao consulta boletins', async () => {
+    const { service, query, boletimModel } = montarInscricoes();
+
+    await service.resumoPorDisciplina({ editalId: 'ed-1' } as never);
+
+    expect(boletimModel.findAll).not.toHaveBeenCalled();
+    expect(sqlEValores(query).sql).not.toContain('boletins');
   });
 });
 

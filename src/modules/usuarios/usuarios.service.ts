@@ -15,8 +15,8 @@ import { Sequelize } from 'sequelize-typescript';
 
 import { EmailService } from '../email/email.service';
 
-import { PaginacaoDto } from '../../common/dto/paginacao.dto';
 import { RespostaPaginada } from '../../common/dto/resposta-paginada.dto';
+import { FiltroProfessoresDto, FiltroProfessoresPublicosDto } from './dto/filtro-professores.dto';
 import { ProfessorPublicoDto } from './dto/professor-publico.dto';
 import { UsuarioRespostaDto } from './dto/usuario-resposta.dto';
 import { Aluno } from './entities/aluno.model';
@@ -333,6 +333,26 @@ export class UsuariosService {
     return this.usuarioModel.scope('comPerfis').findByPk(id);
   }
 
+  /**
+   * Resolve uma identidade pelo E-MAIL, com os perfis carregados.
+   *
+   * Usada pela aprovacao de candidatura em edital: a inscricao guarda o e-mail
+   * de alguem que pode ou nao ter conta, e e preciso descobrir qual dos dois
+   * antes de decidir entre criar um aluno ou reaproveitar o que existe.
+   *
+   * Vive aqui, e nao no modulo de editais, porque "este e-mail pertence a um
+   * aluno?" e pergunta sobre IDENTIDADE — saber que a resposta depende de haver
+   * linha em `alunos` (AD-03) e conhecimento deste modulo, nao do outro.
+   *
+   * Escopo `comPerfis`, nunca `comSenha`: o hash nao tem caminho ate aqui, e o
+   * include de aluno/professor e o que permite a quem chama distinguir uma conta
+   * de aluno de uma conta so-professor. `email` e CITEXT, entao a busca ignora
+   * caixa pelo proprio banco.
+   */
+  async buscarPorEmailComPerfis(email: string): Promise<Usuario | null> {
+    return this.usuarioModel.scope('comPerfis').findOne({ where: { email } });
+  }
+
   async buscarPorIdOuFalhar(id: string): Promise<Usuario> {
     const usuario = await this.buscarPorIdComPerfis(id);
 
@@ -477,19 +497,69 @@ export class UsuariosService {
     return UsuarioRespostaDto.deModelo(aluno.usuario!, aluno, null);
   }
 
-  async listarProfessores(paginacao: PaginacaoDto): Promise<RespostaPaginada<UsuarioRespostaDto>> {
+  /**
+   * Lista professores, com busca em tudo que a resposta ja expoe a quem tem
+   * token: nome, e-mail, identificacao funcional e departamento.
+   *
+   * O escopo e deliberadamente MAIOR que o da listagem publica logo abaixo.
+   * As duas listas de colunas estao de proposito uma ao lado da outra: e a
+   * diferenca entre elas que impede a rota anonima de virar um confirmador de
+   * enderecos (ver `FiltroProfessoresPublicosDto`).
+   */
+  async listarProfessores(
+    filtro: FiltroProfessoresDto,
+  ): Promise<RespostaPaginada<UsuarioRespostaDto>> {
     const { rows, count } = await this.professorModel.findAndCountAll({
+      where: this.buscaDeProfessor(filtro.busca, [
+        '$usuario.nome$',
+        '$usuario.email$',
+        'identificacaoFuncional',
+        'departamento',
+      ]),
       include: [{ model: Usuario, required: true }],
       order: [[{ model: Usuario, as: 'usuario' }, 'nome', 'ASC']],
-      limit: paginacao.limite,
-      offset: paginacao.offset,
+      limit: filtro.limite,
+      offset: filtro.offset,
+      /**
+       * `subQuery: false` e exigido pela busca, nao e gosto.
+       *
+       * O caminho `$usuario.nome$` so existe se o JOIN estiver na consulta
+       * principal. Com `limit` e um include, o Sequelize tende a mover a
+       * paginacao para uma subconsulta que nao traz esse JOIN — e a consulta
+       * falha com "missing FROM-clause entry for table usuario". Mesmo motivo
+       * em `listarAlunos`.
+       */
+      subQuery: false,
+      distinct: true,
     });
 
     const dados = rows.map((professor) =>
       UsuarioRespostaDto.deModelo(professor.usuario!, null, professor),
     );
 
-    return new RespostaPaginada(dados, count, paginacao.pagina, paginacao.limite);
+    return new RespostaPaginada(dados, count, filtro.pagina, filtro.limite);
+  }
+
+  /**
+   * Monta o OR da busca sobre as colunas que a rota autoriza.
+   *
+   * As colunas vem de quem chama, e e assim de proposito: a lista fica visivel
+   * no corpo de cada listagem, em vez de escondida atras de um booleano do tipo
+   * `incluirEmail` — que seria facil de inverter por engano e dificil de
+   * perceber em revisao. Nenhuma string vem do cliente; o cliente manda apenas
+   * o TERMO, que entra como valor parametrizado no `iLike`.
+   */
+  private buscaDeProfessor(
+    termo: string | undefined,
+    colunas: string[],
+  ): Record<string | symbol, unknown> {
+    if (!termo) {
+      return {};
+    }
+
+    const padrao = `%${termo}%`;
+
+    return { [Op.or]: colunas.map((coluna) => ({ [coluna]: { [Op.iLike]: padrao } })) };
   }
 
   /**
@@ -505,23 +575,38 @@ export class UsuariosService {
    * consulta nem um erro de mapeamento futuro consegue vaza-lo por esta rota.
    */
   async listarProfessoresPublicos(
-    paginacao: PaginacaoDto,
+    filtro: FiltroProfessoresPublicosDto,
   ): Promise<RespostaPaginada<ProfessorPublicoDto>> {
     const { rows, count } = await this.professorModel.findAndCountAll({
       attributes: ['usuarioId', 'departamento'],
+      /**
+       * NOME e DEPARTAMENTO, e nada mais.
+       *
+       * `$usuario.email$` e `identificacaoFuncional` NAO entram aqui, e a razao
+       * esta inteira em `FiltroProfessoresPublicosDto`: buscar por e-mail
+       * permitiria a um anonimo confirmar, pelo acerto ou pelo vazio, que um
+       * endereco pertence a um docente — o dado nao apareceria na resposta, mas
+       * a resposta o confirmaria. Comparar com a lista de `listarProfessores`,
+       * logo acima, e o ponto.
+       */
+      where: this.buscaDeProfessor(filtro.busca, ['$usuario.nome$', 'departamento']),
       include: [
         { model: Usuario, required: true, attributes: ['id', 'nome'], where: { ativo: true } },
       ],
       order: [[{ model: Usuario, as: 'usuario' }, 'nome', 'ASC']],
-      limit: paginacao.limite,
-      offset: paginacao.offset,
+      limit: filtro.limite,
+      offset: filtro.offset,
+      // Mesmo motivo de `listarProfessores`: o caminho `$usuario.nome$` exige o
+      // JOIN na consulta principal.
+      subQuery: false,
+      distinct: true,
     });
 
     return new RespostaPaginada(
       rows.map(ProfessorPublicoDto.deModelo),
       count,
-      paginacao.pagina,
-      paginacao.limite,
+      filtro.pagina,
+      filtro.limite,
     );
   }
 
