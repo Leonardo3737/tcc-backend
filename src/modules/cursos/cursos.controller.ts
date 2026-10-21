@@ -63,7 +63,7 @@ export class CursosController {
   @Get()
   @ApiOperation({ summary: 'Lista cursos do catalogo. PUBLICO (alimenta o formulario de edital).' })
   @ApiRespostaPaginada(CursoRespostaDto)
-  listar(@Query() filtro: FiltroCursosDto): Promise<RespostaPaginada<CursoRespostaDto>> {    
+  listar(@Query() filtro: FiltroCursosDto): Promise<RespostaPaginada<CursoRespostaDto>> {
     return this.cursosService.listar(filtro);
   }
 

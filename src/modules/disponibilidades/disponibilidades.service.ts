@@ -30,7 +30,7 @@ export class DisponibilidadesService {
   constructor(
     @InjectModel(Disponibilidade) private readonly disponibilidadeModel: typeof Disponibilidade,
     private readonly config: ConfigService,
-  ) { }
+  ) {}
 
   /**
    * Declara uma faixa semanal de disponibilidade do monitor.
@@ -81,7 +81,7 @@ export class DisponibilidadesService {
   ): Promise<DisponibilidadeRespostaDto[]> {
     const where: Record<string, unknown> = {
       monitoriaId,
-      ...((typeof filtro.ativa === 'boolean') ? { ativa: filtro.ativa } : {})
+      ...(typeof filtro.ativa === 'boolean' ? { ativa: filtro.ativa } : {}),
     };
 
     if (filtro.participanteId) {

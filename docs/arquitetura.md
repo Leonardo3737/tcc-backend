@@ -308,6 +308,11 @@ Semântica: **recorrência semanal declarada**, não slots concretos. A disponib
 faixa é rejeitada); as ocorrências concretas são sempre `atendimentos` (D-04, decidido).
 
 ### 4.8 `atendimentos` — a *sessão*
+
+> Não há coluna de duração, e isso é decisão registrada (AD-30): `inicio` e `fim`
+> são NOT NULL com `CHECK (fim > inicio)`, e `ex_monitor_sem_conflito` impede
+> sobreposição entre atendimentos contáveis do mesmo monitor. A carga horária é
+> somada na leitura, sem risco de duração indefinida, negativa ou contada em dobro.
 | Coluna | Tipo | Notas |
 |---|---|---|
 | `id` | uuid PK | |
@@ -743,6 +748,7 @@ fase própria, e este caso não é atalho para ela.
 | `GamificacaoModule` | pontuação e ranking; módulo folha, acoplado por eventos | `GamificacaoService` |
 | `AnalyticsModule` | indicadores agregados, somente leitura | — |
 | `ConfiguracaoModule` | metadados de operação (fuso, limites de agendamento) | — |
+| `RelatoriosModule` | relatório final de monitoria em `.docx`, preenchendo o modelo oficial. Módulo folha e somente leitura | — |
 | `EditaisModule` | editais de seleção, inscrição **pública** e boletim em PDF. Importa `Cursos` e `Disciplinas`; ninguém o importa | — |
 
 ### 8.2 Justificativas
@@ -974,6 +980,8 @@ entre o mínimo e o máximo.
 | AD-27 | Catalogo legivel sem token | `GET` de cursos, disciplinas e uma projecao minima de professores (sem e-mail) passaram a publicos | o formulario de inscricao precisa montar as listas sem conta. Duplicar as consultas em rotas paralelas seria o endpoint redundante que o escopo proibe; nenhuma delas expoe dado pessoal, e a de professores ganhou DTO proprio por conter e-mail na versao autenticada |
 | AD-28 | Agrupamento por disciplina como RESUMO, nao como lista aninhada | `GET /inscricoes/resumo` devolve um total por disciplina, nao paginado, e a lista de candidatos continua no endpoint plano; filtros derivados por `OmitType` do filtro da listagem | lista aninhada tornaria a paginacao ambigua (grupos? candidatos? os dois?) e a resposta cresceria como grupos x candidatos. Agrupar no cliente era pior: com mais de 100 inscricoes o limite de pagina corta um grupo e o ranking parcial parece completo. Limite aceito: disciplina sem candidato nao aparece, porque o edital nao declara as disciplinas que oferece |
 | AD-29 | Aprovacao de candidatura em tres passos de "encontrar, adotar ou criar", sem transacao unica | `POST /inscricoes/:id/aprovar` recebe so o id; conta, monitoria e vinculo committam separados, com o passo irrepetivel por ultimo; `monitorias.edital_id` nulavel registra a procedencia. Monitoria ja existente para a oferta e REUSADA (se do mesmo edital) ou ADOTADA (se sem edital: grava-se `edital_id` e nada mais), porque a oferta e a mesma e o banco garante que existe so uma; recusa-se apenas se vier de OUTRO edital ou estiver encerrada/cancelada | atomicidade exigiria passar `transaction` por dentro de tres modulos e manter a transacao aberta durante o envio da senha por e-mail (AD-15). Repetibilidade resolve os dois estados parciais possiveis: chamar de novo retoma de onde parou. O responsavel e o professor INDICADO na inscricao, nao quem aprova: e ele quem supervisiona a disciplina. Isso levou `professorId` para `CriarMonitoriaDto` sem decorator de validacao (o ValidationPipe o recusa se vier do cliente) e fez `POST /monitorias` injeta-lo no controller. A RN01 nao e reaplicada neste caminho — o guard protege a rota de monitores, nao o service —, e o preco e pago em auditoria: `habilitado_por_usuario_id` grava quem aprovou |
+| AD-30 | Carga horaria calculada sob demanda, sem coluna de duracao | `SUM(fim - inicio)` dos atendimentos REALIZADOS, dentro do GROUP BY que ja produz os indicadores de cada monitor; soma em segundos e arredonda uma vez, no total; minuto como unidade canonica | o schema ja garante o que uma coluna garantiria: `inicio`/`fim` NOT NULL com CHECK (fim > inicio) tornam impossivel duracao indefinida ou negativa, e `ex_monitor_sem_conflito` impede sobreposicao de atendimentos contaveis do mesmo monitor — a soma e de intervalos disjuntos. `reagendar` muda inicio/fim, e coluna derivada passaria a exigir sincronia. Custo de consulta: zero |
+| AD-31 | Relatorio .docx preenchendo o MODELO, nao gerando documento novo | abre o pacote, troca so `word/document.xml` e fecha; ancora nos ROTULOS visiveis em vez de placeholders; ancoras conferidas em `onModuleInit`; gerado sob demanda, nada armazenado | cabecalho com logotipo, estilos, tema e tabela voltam byte a byte, sem nenhuma linha de codigo descrevendo formatacao. Placeholders (docxtemplater) exigiriam remarcar o arquivo a cada versao que a coordenacao enviar; ancorar no rotulo visivel sobrevive a uma versao nova, e quando nao sobreviver a aplicacao nao sobe. Campo que o banco nao responde fica EM BRANCO, inclusive as datas de outro semestre que o modelo trazia escritas a mao |
 
 ---
 

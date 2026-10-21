@@ -24,6 +24,7 @@ import { LogsModule } from './modules/logs/logs.module';
 import { MateriaisModule } from './modules/materiais/materiais.module';
 import { MonitoriasModule } from './modules/monitorias/monitorias.module';
 import { NotificacoesModule } from './modules/notificacoes/notificacoes.module';
+import { RelatoriosModule } from './modules/relatorios/relatorios.module';
 import { UsuariosModule } from './modules/usuarios/usuarios.module';
 
 @Module({
@@ -88,6 +89,7 @@ import { UsuariosModule } from './modules/usuarios/usuarios.module';
     AnalyticsModule,
     NotificacoesModule,
     EditaisModule,
+    RelatoriosModule,
   ],
   providers: [
     // Registrado aqui para valer sobre TODA a aplicacao, inclusive erros

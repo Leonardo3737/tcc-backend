@@ -79,6 +79,31 @@ export class AtividadeMonitorDto {
   @ApiProperty({ example: 21, description: 'Presencas confirmadas nas sessoes dele.' })
   alunosAtendidos: number;
 
+  /**
+   * Carga horaria acumulada, em MINUTOS inteiros.
+   *
+   * Minutos sao a unidade canonica porque sao exatos: horas decimais nao
+   * representam 1h20min sem dizima (1,3333...), e uma carga horaria que nao
+   * fecha na conta do aluno e pior que uma unidade menos conveniente. O campo
+   * em horas existe ao lado, para exibicao.
+   *
+   * Soma apenas atendimentos REALIZADOS — ver a nota no SQL de
+   * `AnalyticsService.monitores`.
+   */
+  @ApiProperty({
+    example: 1265,
+    description:
+      'Carga horaria acumulada em minutos, somando (fim - inicio) dos atendimentos ' +
+      'REALIZADOS. AGENDADO e CANCELADO nao entram.',
+  })
+  cargaHorariaMinutos: number;
+
+  @ApiProperty({
+    example: 21.08,
+    description: 'A mesma carga horaria em horas, com 2 casas. Derivado dos minutos.',
+  })
+  cargaHorariaHoras: number;
+
   @ApiProperty({ example: 11 }) totalAvaliacoes: number;
   @ApiPropertyOptional({ example: 4.8, nullable: true }) mediaAvaliacoes: number | null;
   @ApiProperty({ example: 6, description: 'Faixas de disponibilidade ativas.' })

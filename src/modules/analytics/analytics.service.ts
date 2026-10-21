@@ -4,6 +4,7 @@ import { QueryTypes } from 'sequelize';
 import { Sequelize } from 'sequelize-typescript';
 
 import { StatusAtendimento } from '../../common/enums/status-atendimento.enum';
+import { minutosEmCargaHoraria } from './carga-horaria';
 import { StatusMonitoria } from '../../common/enums/status-monitoria.enum';
 import {
   AtividadeMonitorDto,
@@ -222,6 +223,36 @@ export class AnalyticsService {
         mp.aluno_id      AS usuario_id,
         u.nome           AS nome,
         COUNT(*) FILTER (WHERE a.status = 'REALIZADO') AS realizados,
+        /*
+         * CARGA HORARIA: soma de (fim - inicio) dos atendimentos REALIZADOS.
+         *
+         * Calculada sob demanda, sem coluna de duracao. A justificativa esta
+         * inteira no schema de atendimentos:
+         *
+         *  - inicio e fim sao NOT NULL com CHECK (fim > inicio), entao toda
+         *    duracao e definida e positiva. Nao existe "atendimento sem
+         *    termino" para excluir;
+         *  - ex_monitor_sem_conflito (EXCLUDE USING gist) proibe sobreposicao
+         *    de atendimentos do MESMO monitor em AGENDADO ou REALIZADO. A soma,
+         *    portanto, e de intervalos disjuntos: nao ha tempo contado em dobro;
+         *  - reagendar altera inicio/fim, e uma coluna de duracao teria de ser
+         *    mantida em sincronia. Derivada que pode divergir da origem e
+         *    exatamente o que o projeto evita: ver inscricoes_edital.media, que
+         *    para ser confiavel precisou ser GENERATED ALWAYS.
+         *
+         * Soma em SEGUNDOS e arredonda UMA vez, no total. Arredondar por
+         * atendimento acumularia erro.
+         *
+         * Nao custa consulta nova: entra no mesmo GROUP BY que ja produz os
+         * outros indicadores de cada monitor.
+         */
+        COALESCE(
+          ROUND(
+            SUM(EXTRACT(EPOCH FROM (a.fim - a.inicio))) FILTER (WHERE a.status = 'REALIZADO')
+            / 60
+          ),
+          0
+        )::int AS carga_horaria_minutos,
         COUNT(*) FILTER (WHERE a.status = 'CANCELADO') AS cancelados,
         COUNT(*) FILTER (WHERE a.status = 'AGENDADO')  AS agendados,
         (SELECT COUNT(*) FROM atendimento_participantes ap
@@ -259,6 +290,7 @@ export class AnalyticsService {
       atendimentosCancelados: Number(linha.cancelados),
       atendimentosAgendados: Number(linha.agendados),
       alunosAtendidos: Number(linha.alunos_atendidos),
+      ...minutosEmCargaHoraria(Number(linha.carga_horaria_minutos)),
       totalAvaliacoes: Number(linha.total_avaliacoes),
       mediaAvaliacoes: linha.media_avaliacoes === null ? null : Number(linha.media_avaliacoes),
       disponibilidadesAtivas: Number(linha.disponibilidades),
