@@ -1,4 +1,4 @@
-import { ApiPropertyOptional } from '@nestjs/swagger';
+import { ApiPropertyOptional, OmitType } from '@nestjs/swagger';
 import { Transform, Type } from 'class-transformer';
 import { IsEnum, IsInt, IsOptional, IsString, IsUUID, Max, MaxLength, Min } from 'class-validator';
 
@@ -113,3 +113,36 @@ export class FiltroInscricoesDto extends PaginacaoDto {
   @IsEnum(DirecaoOrdenacao, { message: 'direcao deve ser asc ou desc' })
   direcao: DirecaoOrdenacao = DirecaoOrdenacao.DESC;
 }
+
+/**
+ * Filtros do RESUMO por disciplina, derivados da listagem.
+ *
+ * `OmitType` em vez de uma classe nova escrita a mao, e a razao e a consistencia
+ * que o resumo precisa manter: ele e o CABECALHO de uma lista que o cliente
+ * carrega depois pelo endpoint plano. Se os dois aceitassem conjuntos de
+ * filtros diferentes, o total do grupo nao bateria com o que o grupo mostra ao
+ * ser aberto — e seria o cabecalho a mentir, porque ele e quem some com o
+ * filtro ignorado.
+ *
+ * Derivando um do outro, um filtro novo em `FiltroInscricoesDto` passa a valer
+ * nos dois no mesmo commit. Duas classes irmas escritas a mao divergiriam na
+ * primeira adicao que alguem esquecesse de replicar.
+ *
+ * O que SAI e so o que nao tem sentido aqui:
+ *
+ *  - `pagina` e `limite`: o resumo nao pagina. Uma linha por disciplina do
+ *    edital e um resultado limitado pelo catalogo da instituicao, nao pelo
+ *    numero de candidatos — paginar cabecalhos de acordeao seria pior que
+ *    inutil. Com `forbidNonWhitelisted`, manda-los devolve 400, que e melhor
+ *    que aceitar e ignorar em silencio;
+ *  - `ordenarPor` e `direcao`: a ordem e fixa (nome da disciplina). Como a
+ *    resposta nao e paginada, reordenar no cliente e CORRETO aqui — ao
+ *    contrario da lista de candidatos, onde ordenar dentro da pagina produz
+ *    ordem errada assim que ha mais de uma pagina.
+ */
+export class FiltroResumoInscricoesDto extends OmitType(FiltroInscricoesDto, [
+  'pagina',
+  'limite',
+  'ordenarPor',
+  'direcao',
+] as const) {}

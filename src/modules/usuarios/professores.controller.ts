@@ -12,7 +12,6 @@ import {
 import { Perfis } from '../../common/decorators/perfis.decorator';
 import { Publico } from '../../common/decorators/publico.decorator';
 import { UsuarioAtual } from '../../common/decorators/usuario-atual.decorator';
-import { PaginacaoDto } from '../../common/dto/paginacao.dto';
 import { ApiRespostaPaginada } from '../../common/decorators/api-resposta-paginada.decorator';
 import { RespostaPaginada } from '../../common/dto/resposta-paginada.dto';
 import { PerfilUsuario } from '../../common/enums/perfil-usuario.enum';
@@ -20,6 +19,7 @@ import { UsuarioAutenticado } from '../../common/types/usuario-autenticado';
 import { AtualizarProfessorDto } from './dto/atualizar-professor.dto';
 import { RespostaErro } from '../../common/dto/resposta-erro.dto';
 import { CriarProfessorPeloProfessorDto } from './dto/criar-usuario-pelo-professor.dto';
+import { FiltroProfessoresDto, FiltroProfessoresPublicosDto } from './dto/filtro-professores.dto';
 import { ProfessorPublicoDto } from './dto/professor-publico.dto';
 import { UsuarioRespostaDto } from './dto/usuario-resposta.dto';
 import { UsuariosService } from './usuarios.service';
@@ -79,10 +79,16 @@ export class ProfessoresController {
    * disso, nome e departamento de docente sao informacao publica na instituicao.
    */
   @Get()
-  @ApiOperation({ summary: 'Lista professores cadastrados na plataforma.' })
+  @ApiOperation({
+    summary: 'Lista professores cadastrados na plataforma.',
+    description:
+      '`busca` e parcial e ignora caixa, varrendo nome, e-mail, identificacao funcional e ' +
+      'departamento de uma vez — o mesmo criterio de GET /alunos. A versao publica desta ' +
+      'rota busca so por nome e departamento.',
+  })
   @ApiRespostaPaginada(UsuarioRespostaDto)
-  listar(@Query() paginacao: PaginacaoDto): Promise<RespostaPaginada<UsuarioRespostaDto>> {
-    return this.usuariosService.listarProfessores(paginacao);
+  listar(@Query() filtro: FiltroProfessoresDto): Promise<RespostaPaginada<UsuarioRespostaDto>> {
+    return this.usuariosService.listarProfessores(filtro);
   }
 
   /**
@@ -102,11 +108,14 @@ export class ProfessoresController {
     description:
       'Projecao minima: identificador, nome e departamento de professores ATIVOS. ' +
       'Sem e-mail, sem identificacao funcional. Para os dados completos use GET /professores, ' +
-      'que exige autenticacao.',
+      'que exige autenticacao. `busca` aqui varre APENAS nome e departamento: aceitar e-mail ' +
+      'permitiria a um anonimo confirmar se um endereco pertence a um docente.',
   })
   @ApiRespostaPaginada(ProfessorPublicoDto)
-  listarPublicos(@Query() paginacao: PaginacaoDto): Promise<RespostaPaginada<ProfessorPublicoDto>> {
-    return this.usuariosService.listarProfessoresPublicos(paginacao);
+  listarPublicos(
+    @Query() filtro: FiltroProfessoresPublicosDto,
+  ): Promise<RespostaPaginada<ProfessorPublicoDto>> {
+    return this.usuariosService.listarProfessoresPublicos(filtro);
   }
 
   @Patch('eu')

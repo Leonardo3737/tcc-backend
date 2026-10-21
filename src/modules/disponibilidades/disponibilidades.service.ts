@@ -9,8 +9,8 @@ import { InjectModel } from '@nestjs/sequelize';
 import { QueryTypes } from 'sequelize';
 
 import { StatusMonitoria } from '../../common/enums/status-monitoria.enum';
-import { Monitoria } from '../monitorias/entities/monitoria.model';
 import { MonitoriaParticipante } from '../monitorias/entities/monitoria-participante.model';
+import { Monitoria } from '../monitorias/entities/monitoria.model';
 import { Aluno } from '../usuarios/entities/aluno.model';
 import { Usuario } from '../usuarios/entities/usuario.model';
 import { CriarDisponibilidadeDto } from './dto/criar-disponibilidade.dto';
@@ -30,7 +30,7 @@ export class DisponibilidadesService {
   constructor(
     @InjectModel(Disponibilidade) private readonly disponibilidadeModel: typeof Disponibilidade,
     private readonly config: ConfigService,
-  ) {}
+  ) { }
 
   /**
    * Declara uma faixa semanal de disponibilidade do monitor.
@@ -81,7 +81,7 @@ export class DisponibilidadesService {
   ): Promise<DisponibilidadeRespostaDto[]> {
     const where: Record<string, unknown> = {
       monitoriaId,
-      ativa: filtro.ativa ?? true,
+      ...((typeof filtro.ativa === 'boolean') ? { ativa: filtro.ativa } : {})
     };
 
     if (filtro.participanteId) {

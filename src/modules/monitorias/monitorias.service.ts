@@ -52,9 +52,27 @@ export class MonitoriasService {
     private readonly participacaoService: ParticipacaoService,
   ) {}
 
+  /**
+   * `dto.professorId` e `editalId` NAO vem do cliente — ver abaixo.
+   *
+   * `professorId` mora no DTO mas sem decorator de validacao, entao o
+   * `ValidationPipe` o recusa se vier na requisicao (ver `CriarMonitoriaDto`).
+   * Quem o preenche e o controller, com o usuario autenticado, ou a aprovacao de
+   * candidatura, com o professor que o candidato indicou.
+   *
+   * ATENCAO ao que isso muda: este service deixou de garantir, por construcao,
+   * que a monitoria pertence a quem chamou. A garantia passou a ser do
+   * controller. Qualquer caminho novo que chame `criar` precisa decidir
+   * explicitamente de quem e a monitoria — e nao ha default silencioso para
+   * cair.
+   *
+   * `editalId` continua sendo parametro do servico, nao campo do DTO: expo-lo
+   * deixaria qualquer professor marcar uma monitoria como "vinda do edital X", e
+   * o resumo do edital afirmaria coisas que nao aconteceram.
+   */
   async criar(
     dto: CriarMonitoriaDto,
-    professor: UsuarioAutenticado,
+    editalId: string | null = null,
   ): Promise<MonitoriaRespostaDto> {
     const disciplina = await this.disciplinasService.buscarOuFalhar(dto.disciplinaId);
 
@@ -64,20 +82,16 @@ export class MonitoriasService {
 
     this.validarVigencia(dto.dataInicio, dto.dataFim);
 
-    /**
-     * O professor responsavel e SEMPRE o usuario autenticado, nunca um campo do
-     * corpo. Aceitar `professorId` do cliente permitiria criar monitoria em nome
-     * de terceiros e, por tabela, habilitar monitores no lugar de outro docente.
-     */
     const monitoria = await this.monitoriaModel.create({
       disciplinaId: dto.disciplinaId,
-      professorId: professor.id,
+      professorId: dto.professorId,
       ano: dto.ano,
       semestre: dto.semestre,
       descricao: dto.descricao ?? null,
       dataInicio: dto.dataInicio ?? null,
       dataFim: dto.dataFim ?? null,
       status: StatusMonitoria.PLANEJADA,
+      editalId,
     });
 
     return this.detalhar(monitoria.id);

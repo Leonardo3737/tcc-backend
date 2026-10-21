@@ -222,7 +222,7 @@ sem `Bearer`). O `persistAuthorization` mantém o token entre recarregamentos.
 npm run test
 ```
 
-380 testes de unidade, sem banco, cobrindo o que o PostgreSQL **não** alcança:
+433 testes de unidade, sem banco, cobrindo o que o PostgreSQL **não** alcança:
 autorização, papéis, transições de estado, propriedade de recurso, campos
 derivados e tradução de erro.
 
@@ -243,7 +243,9 @@ derivados e tradução de erro.
 | `disciplinas.spec.ts` | geração do código (prefixo, acentos, numeração, largura) e nova tentativa quando a constraint recusa |
 | `email.spec.ts` | modo log sem credencial, payload e cabeçalhos do Brevo, timeout, recusa do provedor e falha de rede sem lançar; corpo nunca no log |
 | `recuperacao-senha.spec.ts` | anti-enumeração (resposta e custo idênticos), teto de tentativas, expiração, uso único, código e senha só como hash |
-| `editais.spec.ts` | período de inscrições (incluindo PATCH parcial), exclusão lógica idempotente, validação do PDF por assinatura, `media` nunca enviada no INSERT, nota em branco que não vira zero, e-mail depois do commit cuja falha não desfaz nada, `NULLS LAST` nas duas direções e ausência do binário nas listagens |
+| `aprovacao-de-inscricao.spec.ts` | a inscrição como única entrada; conta reaproveitada e nunca alterada; responsável é quem aprova, não quem o candidato indicou; período vindo do edital; reuso da monitoria da oferta; ordem dos passos que torna a operação repetível |
+| `professores.spec.ts` | busca na listagem de professores, e a assimetria entre as duas rotas: a pública varre menos campos, e nunca o e-mail |
+| `editais.spec.ts` | resumo por disciplina (valores sempre por `replacements`, `semMedia` derivado, melhor média nula em vez de zero), período de inscrições (incluindo PATCH parcial), exclusão lógica idempotente, validação do PDF por assinatura, `media` nunca enviada no INSERT, nota em branco que não vira zero, e-mail depois do commit cuja falha não desfaz nada, `NULLS LAST` nas duas direções e ausência do binário nas listagens |
 
 ### Verificação ponta a ponta
 
@@ -257,7 +259,7 @@ Com o banco semeado (`npm run db:seed`) e o servidor rodando em outro terminal:
 npm run test:fluxo
 ```
 
-**260 verificações**, todas passando contra PostgreSQL 17. O seeder passou a ser
+**316 verificações**, todas passando contra PostgreSQL 17. O seeder passou a ser
 pré-requisito: sem auto-cadastro, o script precisa de um professor que ele não
 pode criar — que é exatamente a restrição verificada nas primeiras linhas.
 [scripts/fluxo-completo.mjs](scripts/fluxo-completo.mjs) percorre o fluxo inteiro
@@ -941,8 +943,8 @@ sair, cancelar, encerrar e remover também são transições de estado, sem verb
 | `PATCH` | `/api/alunos/eu` | **ALUNO** |
 | `GET` | `/api/alunos/:usuarioId` | PROFESSOR ou o próprio |
 | `POST` | `/api/professores` | **PROFESSOR** — único caminho de criação de professor |
-| `GET` | `/api/professores/publicos` | **público** — só id, nome e departamento (sem e-mail) |
-| `GET` | `/api/professores` · `/api/professores/:usuarioId` | autenticado |
+| `GET` | `/api/professores/publicos` | **público** — só id, nome e departamento (sem e-mail). `?busca=` em nome e departamento |
+| `GET` | `/api/professores` · `/api/professores/:usuarioId` | autenticado — `?busca=` em nome, e-mail, identificação funcional e departamento |
 | `PATCH` | `/api/professores/eu` | **PROFESSOR** |
 
 ### Cursos e disciplinas
@@ -963,11 +965,31 @@ a de professores é a exceção e por isso ganhou projeção própria
 (`/api/professores/publicos`, sem e-mail). **Toda a escrita continua restrita a
 PROFESSOR.**
 
+As duas listagens de professor aceitam `?busca=` (parcial, sem distinção de
+caixa), com **escopos diferentes de propósito**:
+
+| Rota | Campos varridos |
+|---|---|
+| `GET /api/professores` (autenticada) | nome, e-mail, identificação funcional, departamento |
+| `GET /api/professores/publicos` | **nome e departamento, nada mais** |
+
+A assimetria é de segurança, não de conveniência. A projeção pública omite o
+e-mail para não entregar endereços a um anônimo; se a busca o aceitasse, isso
+seria desfeito pelo outro lado — bastaria digitar `fulano@ufx.edu.br` e
+descobrir, pelo acerto ou pelo vazio, se o endereço pertence a um docente. O
+dado não apareceria na resposta, mas a resposta o **confirmaria**, e em
+silêncio. É a mesma preocupação que faz `/auth/recuperacao/solicitar` responder
+`202` para e-mail inexistente. A identificação funcional (SIAPE) fica fora pelo
+mesmo motivo, agravado por ser dado administrativo.
+
+O `fluxo-completo` verifica o par: o **mesmo** e-mail encontra na rota com token
+e devolve zero na rota anônima.
+
 ### Monitorias
 
 | Método | Rota | Acesso |
 |---|---|---|
-| `POST` | `/api/monitorias` | **PROFESSOR** |
+| `POST` | `/api/monitorias` | **PROFESSOR** — não aceita `professorId` (vem do token) nem `editalId` |
 | `GET` | `/api/monitorias` · `/api/monitorias/:monitoriaId` | autenticado |
 | `GET` | `/api/monitorias/minhas` | autenticado |
 | `PATCH` | `/api/monitorias/:monitoriaId` | professor responsável |
@@ -1042,8 +1064,10 @@ PROFESSOR.**
 | `DELETE` | `/api/editais/:id` | **PROFESSOR** — exclusão **lógica** (`ativo = false`) |
 | `POST` | `/api/editais/:editalId/inscricoes` | **público** (**20 req/min**) — `multipart/form-data` |
 | `GET` | `/api/inscricoes` | **PROFESSOR** — filtros e ordenações abaixo |
+| `GET` | `/api/inscricoes/resumo` | **PROFESSOR** — totais por disciplina (cabeçalho de acordeão) |
 | `GET` | `/api/inscricoes/:id` | **PROFESSOR** |
 | `GET` | `/api/inscricoes/:id/boletim` | **PROFESSOR** — devolve o PDF como anexo |
+| `POST` | `/api/inscricoes/:id/aprovar` | **PROFESSOR** — cria a monitoria e habilita o monitor |
 
 **Filtros de `GET /api/inscricoes`:** `editalId`, `cursoId`, `disciplinaId`,
 `turno`, `professorId`, `ano` e `semestre` (do edital, por JOIN), `busca`
@@ -1052,6 +1076,9 @@ PROFESSOR.**
 **Ordenações:** `media`, `n1`, `n2`, `nome`, `matricula`, `criadoEm` — cada uma
 com `direcao=asc|desc`. Nota ausente vai **sempre para o fim** da lista, nas
 duas direções.
+
+`GET /api/inscricoes/resumo` aceita os **mesmos filtros** (sem paginação nem
+ordenação) e devolve um total por disciplina. Ver *Agrupamento por disciplina*.
 
 ---
 
@@ -1203,6 +1230,268 @@ Quem decide se hoje está no período é o PostgreSQL —
 já tomam. O `::text` não é detalhe: sem ele o driver devolveria `date` como
 `Date` à meia-noite do fuso do **processo**, reintroduzindo exatamente o fuso que
 a consulta existe para tirar do caminho.
+
+### Agrupamento por disciplina
+
+Cada disciplina do edital vira **uma** monitoria, então a banca trabalha
+disciplina por disciplina, não numa lista corrida.
+`GET /api/inscricoes/resumo` devolve uma linha por disciplina — `totalInscricoes`,
+`comMedia`, `semMedia` e `melhorMedia` — e é o **cabeçalho** de um acordeão: o
+cliente desenha os grupos com ela e carrega os candidatos de cada um sob demanda
+em `GET /api/inscricoes?editalId=…&disciplinaId=…`.
+
+A divisão não é estética. O resumo tem tamanho limitado pelo catálogo de
+disciplinas (dezenas de linhas minúsculas) e por isso **não é paginado**; a lista
+de candidatos cresce sem teto e continua paginada no banco. Como o resumo não
+pagina, reordenar no cliente ali é correto — ao contrário da lista, em que
+ordenar dentro da página produz ordem errada assim que há mais de uma página.
+
+A alternativa seria agrupar no navegador o que couber em uma página. É o que
+quebra: com mais de 100 inscrições, o limite de página corta um grupo ao meio e
+o ranking parcial **tem aparência de completo**. Esse era o defeito a eliminar.
+
+Os dois endpoints aceitam **o mesmo conjunto de filtros**, e isso é estrutural:
+`FiltroResumoInscricoesDto` é derivado de `FiltroInscricoesDto` com `OmitType`,
+tirando só paginação e ordenação. Se os dois aceitassem conjuntos diferentes, o
+total do cabeçalho não bateria com o conteúdo do grupo — e seria o cabeçalho a
+mentir. Mandar `pagina`, `limite`, `ordenarPor` ou `direcao` no resumo devolve
+`400` pelo `forbidNonWhitelisted`, em vez de ser aceito e ignorado em silêncio.
+
+A consulta é SQL cru com `GROUP BY`, como em `AnalyticsService` — `findAndCountAll`
+com `group` devolve `count` como **array** de grupos, não número. Os valores do
+cliente saem por `replacements`; nenhum pedaço do texto da consulta vem da
+requisição. O plano confirma que o índice criado para o filtro cobre o
+agrupamento:
+
+```
+GroupAggregate
+  Group Key: disciplina_id
+  ->  Index Only Scan using ix_inscricao_edital_disciplina
+```
+
+Como uma pessoa só pode se inscrever uma vez por edital (`UNIQUE` em matrícula e
+e-mail), os grupos são **disjuntos** e a soma dos totais é o total do edital — o
+`fluxo-completo` verifica essa igualdade e, grupo por grupo, que cada total do
+resumo é exatamente o que a listagem daquela disciplina devolve.
+
+### Aprovação: a seleção vira monitoria
+
+`POST /api/inscricoes/:id/aprovar` recebe **o id da inscrição e nada mais**.
+Disciplina, curso, período e os dados da conta saem todos dela — o professor não
+redigita nada, e por isso a monitoria não tem como nascer divergente da
+candidatura que a originou.
+
+São três passos, cada um **encontrar ou criar**:
+
+| | Passo | Reaproveita quando |
+|---|---|---|
+1 | a **conta** do candidato | o e-mail da inscrição já tem conta |
+2 | a **monitoria** da oferta | já existe para a mesma disciplina, professor, ano e semestre — reusada se vier deste edital, **adotada** se não tiver edital |
+3 | o **vínculo de MONITOR** | nunca — é o único passo irrepetível |
+
+A resposta diz, em cada um, o que de fato aconteceu (`monitoria.origem`,
+`monitor.contaCriada`). Não é detalhe interno: é a diferença entre "abri a
+monitoria de Banco de Dados", "acrescentei o segundo monitor" e "usei a
+monitoria que você mesmo havia aberto" — e entre "a senha provisória foi
+enviada" e "a conta já existia, nada foi enviado". O terceiro caso de
+`origem` importa mais que os outros: a aprovação escreveu em um registro que
+outra pessoa criou, e quem aprova tem o direito de saber disso.
+
+#### Por que não é uma transação só
+
+Os três passos committam separadamente. Torná-los atômicos exigiria passar
+`transaction` por dentro de `UsuariosService.criarAluno`,
+`MonitoriasService.criar` e `ParticipantesService.criarVinculo` — assinaturas de
+três módulos que esta feature não tem motivo para reescrever. Pior: a criação da
+conta **envia a senha por e-mail dentro da própria transação** (AD-15), e
+estender essa transação manteria uma conexão aberta esperando um provedor
+externo.
+
+O que se faz no lugar é tornar a operação **repetível**. Falhando no meio, o
+estado parcial é sempre um dos dois, e os dois se resolvem chamando o endpoint
+de novo:
+
+- conta criada, sem monitoria → o passo 1 a reaproveita;
+- monitoria criada, sem monitor → o passo 2 a reaproveita.
+
+O passo 3 é o único irrepetível e é o **último** de propósito: depois dele não
+resta nada para dar errado. Repetir uma aprovação já concluída devolve `409` pela
+RN09 — "este aluno já é monitor aqui" —, não um vínculo duplicado.
+
+#### Reaproveitar a monitoria não é otimização
+
+`uq_monitoria_oferta` é `UNIQUE (disciplina_id, professor_id, ano, semestre)`:
+uma segunda monitoria da mesma oferta é **impossível** no banco. Sem o reuso,
+uma disciplina com duas vagas travaria em `409` na segunda aprovação. O
+resultado é o que o processo espera: uma monitoria por disciplina, com tantos
+monitores quantos foram aprovados.
+
+Como o banco garante **no máximo uma** monitoria por oferta, uma consulta basta.
+Havendo uma, três caminhos — e a resposta diz qual, em `monitoria.origem`:
+
+| `origem` | Quando | O que acontece |
+|---|---|---|
+`CRIADA` | não existia nada para a oferta | nasce agora, já com `edital_id` |
+`REUSADA` | já existe, vinda **deste** edital | usada como está; é o segundo monitor da disciplina |
+`ADOTADA` | existe **sem** edital | `edital_id` é gravado nela e ela é usada |
+
+A **adoção** é o caso do professor que abre a monitoria à mão e só depois roda a
+seleção — um fluxo legítimo. Recusar ali pediria trabalho manual sem razão de
+domínio: a oferta é a mesma (mesma disciplina, mesmo professor, mesmo período) e
+o banco garante que existe só uma.
+
+Por que *gravar* `edital_id` em vez de só usar a monitoria: é essa coluna que o
+resumo por disciplina consulta para dizer se o grupo foi resolvido. Usar sem
+gravar deixaria a tela afirmando "pendente" com o monitor já habilitado —
+inconsistência pior que a recusa que isso substitui. A adoção toca **uma** coluna:
+dono, disciplina, período e status ficam como estavam, e o `fluxo-completo`
+verifica que o responsável não muda.
+
+Duas recusas sobram, as duas com razão de domínio:
+
+- a oferta veio de **outro** edital → ela é o resultado de outro processo
+  seletivo, e reescrever a procedência apagaria esse fato;
+- a monitoria está **encerrada** ou **cancelada** → não aceita participante. A
+  verificação vem **antes** da adoção, e a ordem é o ponto: adotar primeiro
+  gravaria `edital_id` numa monitoria inutilizável, e o resumo passaria a
+  mostrar "monitoria aberta, monitor pendente" — estado que sugere "tente de
+  novo" quando nenhuma tentativa vai funcionar.
+
+#### O responsável é o professor indicado na inscrição
+
+A inscrição guarda um `professorId` — o professor que o **candidato** escolheu no
+formulário público, e que vai supervisionar aquela disciplina. É dele que a
+monitoria nasce. Quem aprova age como **banca**: registra o resultado da seleção,
+não assume a monitoria.
+
+Isso custou duas mudanças fora do módulo de editais, e as duas são visíveis:
+
+- `professorId` passou a morar em `CriarMonitoriaDto` — **sem decorator de
+  validação**. Esse é o mecanismo, não esquecimento: o `ValidationPipe` roda com
+  `whitelist` e `forbidNonWhitelisted`, então propriedade sem decorator de
+  validação não entra na whitelist e mandá-la devolve `400`. `@ApiHideProperty`
+  impede o plugin CLI do Swagger de anunciar um campo que a API recusa;
+- `POST /monitorias` passou a **injetar** o valor no controller, com o id do
+  token. O efeito daquela rota não mudou — a monitoria continua sendo sempre de
+  quem a criou —, mas a garantia saiu do service e virou responsabilidade do
+  controller. Qualquer caminho novo que chame `criar` precisa decidir
+  explicitamente de quem é a monitoria; não há default silencioso para cair.
+
+A garantia de que o valor é de um professor de verdade continua sendo a FK
+`monitorias_professor_id_fkey` → `professores(usuario_id)`.
+
+Ano e semestre vêm do **edital**, não do relógio: uma aprovação feita em janeiro
+cairia no semestre errado.
+
+##### O que isso implica para a RN01
+
+A RN01 diz que só o professor responsável habilita monitores, e a autorização
+vive no `ParticipacaoGuard`, que protege `POST /monitorias/:id/monitores`. A
+aprovação **não** passa por esse guard — ela chama `habilitarMonitor` direto —,
+então aqui o monitor é habilitado por alguém que pode não ser o responsável.
+
+É uma exceção deliberada, com o preço pago em auditoria em vez de em silêncio:
+`habilitadoPorUsuarioId` grava **quem aprovou**, não o responsável. Quem olhar o
+vínculo depois vê que o ato partiu da banca. O `fluxo-completo` verifica os dois
+valores lado a lado: a monitoria é da Prof Maria, a habilitação está no nome de
+quem conduziu a seleção.
+
+Vale saber o que resta: um professor aprovando uma candidatura cria monitoria no
+nome de um colega que não foi consultado. O `professorId` não é texto livre — vem
+da inscrição, escolhido pelo candidato na lista pública de professores —, mas o
+colega não autorizou. A contenção disponível, se algum dia for desejada, é exigir
+que quem aprova **seja** o indicado; hoje isso não é exigido de propósito, para a
+banca poder registrar os aprovados sem depender da agenda de cada docente.
+
+#### Conta existente: reaproveitada, nunca alterada
+
+A chave é o **e-mail**. Três casos de conta existente têm resposta diferente, e
+nenhum cai em violação de constraint:
+
+| Situação | Resposta |
+|---|---|
+já é ALUNO | reaproveita, sem tocar em nada dele |
+existe, sem perfil ALUNO | `409` — não se promove um docente a monitor por efeito colateral |
+existe e está inativa | `409` — monitor que não entra na plataforma não é monitor |
+matrícula de outra conta | `409` nomeando o e-mail que ocupa a matrícula |
+
+O **curso** do aluno existente não é sobrescrito pelo da inscrição. Divergindo,
+quem recusa é a FK composta de `monitoria_participantes`, pela voz de
+`exigirCursoCompativel` — reescrever o curso de alguém a partir de um formulário
+público seria bem pior que recusar.
+
+O último caso da tabela merece nota: a conta é resolvida por e-mail, mas a
+matrícula também é única. Um candidato que se inscreveu com e-mail diferente do
+da conta que já tem cairia em `alunos_matricula_key` — recusa verdadeira que não
+diz o que fazer no fim de um processo seletivo. A mensagem nomeia o e-mail dono
+da matrícula, que é a informação que resolve.
+
+#### `monitorias.edital_id`
+
+Coluna **nulável**: monitoria sem edital continua sendo o caminho normal, e
+`POST /monitorias` não mudou em nada. Preenchida, diz que a monitoria nasceu de
+uma aprovação — e é isso que permite ao resumo marcar o grupo como resolvido sem
+confundir com uma monitoria que o professor abriu à mão no mesmo período.
+
+Não existe `UNIQUE (edital_id, disciplina_id)`. Ela faria valer "cada disciplina
+tem uma monitoria por edital", que é a leitura natural do processo, mas recusaria
+no **momento da aprovação** o caso de dois candidatos da mesma disciplina que
+indicaram professores diferentes — o pior momento possível para descobrir uma
+regra. Como o serviço reaproveita a monitoria, o caso comum já resulta em uma só.
+
+#### O que a aprovação **não** verifica
+
+Nem que o período de inscrições encerrou, nem que o edital está ativo. Aprovar
+acontece depois do processo, por definição; e `ativo = false` é a exclusão
+lógica, cujo uso típico é tirar da vitrine um edital que **terminou**. Recusar
+nesse estado inverteria a ordem natural: o professor encerraria o edital e
+perderia a capacidade de registrar os aprovados dele.
+
+#### Dependência do e-mail, que precisa estar às claras
+
+Aprovar um candidato **sem conta** depende do provedor de e-mail estar de pé: a
+senha provisória é entregue dentro da transação de criação e, falhando, a conta
+não é criada e a aprovação devolve `503` (AD-15). Está correto — conta cuja senha
+nunca chegou é conta inutilizável —, mas é uma dependência externa em cima de uma
+operação administrativa.
+
+Vale também o domínio institucional: a inscrição pública aceita e-mail de
+qualquer domínio de propósito (o candidato pode não ter conta institucional), mas
+a criação de usuário respeita `EMAIL_DOMINIOS_PERMITIDOS`. Com a variável
+configurada, aprovar um candidato de e-mail pessoal devolve `400`.
+
+#### No resumo por disciplina
+
+`GET /api/inscricoes/resumo` ganhou três campos:
+
+| Campo | Significado |
+|---|---|
+`monitoriaCadastrada` | existe monitoria **deste edital** para a disciplina **e** ela tem monitor |
+`monitoriaId` | a monitoria vinda do edital, se houver — mesmo sem monitor ainda |
+`monitoresHabilitados` | monitores ATIVOS nela |
+
+As duas condições de `monitoriaCadastrada` andam juntas de propósito: monitoria
+sem monitor é um passo pela metade — tipicamente uma aprovação interrompida — e
+marcar o grupo como pronto nesse estado esconderia exatamente o caso que precisa
+de atenção. Com `monitoriaId` preenchido e `monitoresHabilitados` em zero, a tela
+pode oferecer "retomar".
+
+A busca é uma **consulta separada**, não um join na agregada: juntar `monitorias`
+e `monitoria_participantes` na consulta agrupada multiplicaria as linhas de
+inscrição por monitor e inflaria `totalInscricoes` — erro silencioso, que nada
+faria falhar.
+
+#### Limite conhecido: disciplina sem candidato não aparece
+
+E não é descuido da consulta. **O edital não declara quais disciplinas oferece** —
+a tabela `editais` tem apenas período, link, ano, semestre e `ativo`, então o
+conjunto de disciplinas de um edital é *derivado* das inscrições recebidas.
+
+Na prática, o professor não distingue "ninguém se inscreveu em Cálculo I" de
+"Cálculo I não faz parte deste edital". Resolver isso não é trabalho de consulta:
+exige o edital passar a declarar suas vagas, em uma tabela `edital_disciplinas`.
+Enquanto ela não existir, esta resposta é a lista do que **chegou**, não do que
+foi **ofertado**.
 
 ### Escopo de acesso da banca
 
@@ -1490,8 +1779,8 @@ origem configurada de qualquer forma.
 cursos, disciplinas, monitorias, participantes, disponibilidades, atendimentos,
 cancelamentos, histórico de status, avaliações, materiais, gamificação
 (pontuação e ranking), analytics, trilha de requisições, recuperação de senha,
-notificações por e-mail e **editais de seleção de monitores** (com inscrição
-pública e boletim em PDF).
+notificações por e-mail e **editais de seleção de monitores** — com inscrição
+pública, boletim em PDF e aprovação que cria a monitoria e habilita o monitor.
 
 **Deliberadamente fora desta versão:**
 

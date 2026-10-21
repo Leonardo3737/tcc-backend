@@ -1,25 +1,40 @@
-import { Controller, Get, Header, Param, ParseUUIDPipe, Query, Res } from '@nestjs/common';
+import { Controller, Get, Header, Param, ParseUUIDPipe, Post, Query, Res } from '@nestjs/common';
 import { Response } from 'express';
 import {
+  ApiBadRequestResponse,
   ApiBearerAuth,
+  ApiConflictResponse,
+  ApiCreatedResponse,
   ApiNotFoundResponse,
   ApiOkResponse,
   ApiOperation,
   ApiProduces,
+  ApiServiceUnavailableResponse,
   ApiTags,
 } from '@nestjs/swagger';
 
 import { ApiRespostaPaginada } from '../../common/decorators/api-resposta-paginada.decorator';
 import { Perfis } from '../../common/decorators/perfis.decorator';
+import { UsuarioAtual } from '../../common/decorators/usuario-atual.decorator';
 import { RespostaErro } from '../../common/dto/resposta-erro.dto';
 import { RespostaPaginada } from '../../common/dto/resposta-paginada.dto';
 import { PerfilUsuario } from '../../common/enums/perfil-usuario.enum';
-import { FiltroInscricoesDto } from './dto/filtro-inscricoes.dto';
+import { UsuarioAutenticado } from '../../common/types/usuario-autenticado';
+import { AprovacaoDeInscricaoService } from './aprovacao-de-inscricao.service';
+import { AprovacaoRespostaDto } from './dto/aprovacao-resposta.dto';
+import { FiltroInscricoesDto, FiltroResumoInscricoesDto } from './dto/filtro-inscricoes.dto';
 import { InscricaoRespostaDto } from './dto/inscricao-resposta.dto';
+import { ResumoPorDisciplinaDto } from './dto/resumo-por-disciplina.dto';
 import { cabecalhoDeAnexo, InscricoesEditalService } from './inscricoes-edital.service';
 
 /**
- * Consulta administrativa das candidaturas. Tudo restrito a PROFESSOR.
+ * Operacoes administrativas sobre as candidaturas. Tudo restrito a PROFESSOR.
+ *
+ * A invariante que a separacao em relacao a `InscricoesPublicasController`
+ * preserva e UMA: nenhuma rota deste arquivo e publica. Nao e "nada escreve" —
+ * a aprovacao de candidatura escreve, e bastante. E que uma classe inteira sem
+ * `@Publico()` torna impossivel deixar passar um dado de candidato por rota
+ * anonima.
  *
  * ESCOPO DE ACESSO, decidido pelo codigo existente e nao inventado aqui: o
  * perfil PROFESSOR e institucional, nao hierarquico — nao existe ADMIN no
@@ -34,14 +49,17 @@ import { cabecalhoDeAnexo, InscricoesEditalService } from './inscricoes-edital.s
  * nao de permissao — e a distincao esta aqui registrada porque e uma decisao,
  * nao um esquecimento.
  *
- * Nenhuma destas rotas e publica, e nao ha versao publica delas: a listagem
- * carrega nome, matricula e e-mail de pessoas que podem nem ter conta.
+ * Nao ha versao publica de nada daqui: a listagem carrega nome, matricula e
+ * e-mail de pessoas que podem nem ter conta.
  */
 @ApiTags('Inscricoes em edital')
 @ApiBearerAuth()
 @Controller('inscricoes')
 export class InscricoesController {
-  constructor(private readonly inscricoesService: InscricoesEditalService) {}
+  constructor(
+    private readonly inscricoesService: InscricoesEditalService,
+    private readonly aprovacaoService: AprovacaoDeInscricaoService,
+  ) {}
 
   @Get()
   @Perfis(PerfilUsuario.PROFESSOR)
@@ -60,6 +78,33 @@ export class InscricoesController {
     return this.inscricoesService.listar(filtro);
   }
 
+  /**
+   * Declarada ANTES de `GET /:id` de proposito.
+   *
+   * O Nest resolve rotas na ordem do arquivo. Depois de `:id`, "resumo" seria
+   * lido como identificador e o ParseUUIDPipe devolveria 400 — mesmo cuidado
+   * de `/editais/abertos` e `/professores/publicos`.
+   */
+  @Get('resumo')
+  @Perfis(PerfilUsuario.PROFESSOR)
+  @ApiOperation({
+    summary: 'Totais de candidaturas agrupados por disciplina. Somente PROFESSOR.',
+    description:
+      'Uma linha por disciplina que RECEBEU candidatura, pensada como cabecalho de acordeao: ' +
+      'o cliente desenha os grupos com esta resposta e carrega os candidatos de cada um sob ' +
+      'demanda, em GET /inscricoes?editalId=...&disciplinaId=.... ' +
+      'Aceita exatamente os mesmos filtros da listagem — e precisa aceitar, senao o total do ' +
+      'cabecalho nao bate com o conteudo do grupo. ' +
+      'NAO e paginado: o resultado e limitado pelo catalogo de disciplinas, nao pelo numero ' +
+      'de candidatos; por isso reordenar no cliente aqui e correto. ' +
+      'ATENCAO: disciplina com ZERO candidatos nao aparece, porque o edital nao declara as ' +
+      'disciplinas que oferece — esta e a lista do que chegou, nao do que foi ofertado.',
+  })
+  @ApiOkResponse({ type: [ResumoPorDisciplinaDto] })
+  resumo(@Query() filtro: FiltroResumoInscricoesDto): Promise<ResumoPorDisciplinaDto[]> {
+    return this.inscricoesService.resumoPorDisciplina(filtro);
+  }
+
   @Get(':id')
   @Perfis(PerfilUsuario.PROFESSOR)
   @ApiOperation({
@@ -73,6 +118,64 @@ export class InscricoesController {
   @ApiNotFoundResponse({ description: 'Inscricao nao encontrada.', type: RespostaErro })
   detalhar(@Param('id', ParseUUIDPipe) id: string): Promise<InscricaoRespostaDto> {
     return this.inscricoesService.detalhar(id);
+  }
+
+  /**
+   * APROVACAO — o unico ponto em que a selecao vira monitoria.
+   *
+   * Recebe o id da inscricao e NADA MAIS: disciplina, curso, periodo e os dados
+   * da conta saem todos dela. Nao ha corpo porque nao ha nada para o professor
+   * redigitar — e redigitar permitiria a monitoria nascer divergente da
+   * candidatura que a originou.
+   *
+   * O que acontece, em tres passos de "encontrar ou criar" (ver
+   * `AprovacaoDeInscricaoService`): a conta do candidato e reaproveitada se o
+   * e-mail ja existir, ou criada com senha enviada por e-mail; a monitoria da
+   * disciplina e reaproveitada se ja existir para a mesma oferta, ou criada com
+   * `editalId` preenchido; e o candidato e habilitado como MONITOR por
+   * `habilitarMonitor`, com RN01 e RN09 inteiras.
+   *
+   * POST e nao PATCH: a operacao nao edita a inscricao — ela nao e alterada em
+   * nada — e sim CRIA recursos a partir dela.
+   */
+  @Post(':id/aprovar')
+  @Perfis(PerfilUsuario.PROFESSOR)
+  @ApiOperation({
+    summary: 'Aprova a candidatura: cria a monitoria e habilita o monitor. Somente PROFESSOR.',
+    description:
+      'Sem corpo: tudo vem da inscricao. O professor AUTENTICADO fica como responsavel pela ' +
+      'monitoria (a RN01 exige que quem habilita seja o responsavel; o professor indicado pelo ' +
+      'candidato segue gravado na inscricao como indicacao). Ano e semestre vem do EDITAL. ' +
+      'Se o e-mail da inscricao ja tem conta, ela e reaproveitada e nenhuma credencial e ' +
+      'enviada; se nao tem, a conta e criada e a senha provisoria vai para o e-mail do ' +
+      'candidato — e se esse envio falhar, a aprovacao devolve 503 e nada e criado (AD-15). ' +
+      'Aprovar um segundo candidato da mesma disciplina REUSA a monitoria e acrescenta outro ' +
+      'monitor. Repetir a aprovacao de quem ja e monitor devolve 409 (RN09). ' +
+      'Nao exige que o periodo de inscricoes tenha encerrado, nem que o edital esteja ativo: ' +
+      'aprovar acontece depois do processo, e um edital excluido logicamente e tipicamente um ' +
+      'processo que terminou.',
+  })
+  @ApiCreatedResponse({ type: AprovacaoRespostaDto })
+  @ApiNotFoundResponse({ description: 'Inscricao nao encontrada.', type: RespostaErro })
+  @ApiBadRequestResponse({
+    description: 'E-mail fora do dominio institucional exigido para criar conta.',
+    type: RespostaErro,
+  })
+  @ApiConflictResponse({
+    description:
+      'Conta sem perfil ALUNO ou inativa; aluno ja e monitor nesta monitoria (RN09); curso do ' +
+      'aluno nao oferece a disciplina; ou ja existe monitoria da oferta fora deste edital.',
+    type: RespostaErro,
+  })
+  @ApiServiceUnavailableResponse({
+    description: 'Falha ao enviar a senha da conta nova. Nada foi criado.',
+    type: RespostaErro,
+  })
+  aprovar(
+    @Param('id', ParseUUIDPipe) id: string,
+    @UsuarioAtual() professor: UsuarioAutenticado,
+  ): Promise<AprovacaoRespostaDto> {
+    return this.aprovacaoService.aprovar(id, professor);
   }
 
   /**

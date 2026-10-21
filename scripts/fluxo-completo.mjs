@@ -313,7 +313,13 @@ async function main() {
     }),
   );
 
-  await esperarSucesso(
+  /**
+   * Guardada porque a aprovacao de candidatura precisa de um professor que NAO
+   * seja quem aprova: o responsavel pela monitoria criada e o INDICADO na
+   * inscricao, e com os dois sendo a mesma pessoa a verificacao nao provaria
+   * nada.
+   */
+  const profMaria = await esperarSucesso(
     'Professor cadastra outro professor (unico caminho pela API)',
     api('POST', '/professores', {
       token: professor.token,
@@ -1364,7 +1370,15 @@ async function main() {
   await verificarNotificacoes({ monitora, monitorado, monitoria });
   await verificarLogs({ professor, monitorado });
   await verificarAjustesDeApi({ professor, monitora, monitorado, monitoria, vinculoMonitora });
-  await verificarEditais({ professor, monitorado, curso, cursoVizinho, disciplina });
+  await verificarEditais({
+    professor,
+    profMaria,
+    monitorado,
+    curso,
+    cursoVizinho,
+    disciplina,
+    compartilhada,
+  });
 
   console.log(
     `\n${falhas === 0 ? verde('TODOS OS PASSOS PASSARAM') : vermelho(`${falhas} FALHA(S)`)}` +
@@ -1904,7 +1918,15 @@ async function verificarAjustesDeApi({ professor, monitora, monitorado, monitori
  * cerca de 15. Rodar o fluxo duas vezes no mesmo minuto estoura o limite e as
  * falhas aparecem como 429 — nao e regressao.
  */
-async function verificarEditais({ professor, monitorado, curso, cursoVizinho, disciplina }) {
+async function verificarEditais({
+  professor,
+  profMaria,
+  monitorado,
+  curso,
+  cursoVizinho,
+  disciplina,
+  compartilhada,
+}) {
   secao('14. Editais e inscricoes de candidatos');
 
   const hoje = await dataLocalDaInstituicao();
@@ -2106,6 +2128,83 @@ async function verificarEditais({ professor, monitorado, curso, cursoVizinho, di
     'GET /professores (completo) continua exigindo token (401)',
     401,
     api('GET', '/professores'),
+  );
+
+  /**
+   * A busca de professor existe nas DUAS rotas, com escopos diferentes.
+   *
+   * A autenticada varre nome, e-mail, identificacao funcional e departamento. A
+   * publica varre so nome e departamento — e as duas verificacoes abaixo que
+   * provam isso sao o par: o MESMO e-mail encontra na rota com token e NAO
+   * encontra na rota anonima. Se alguem acrescentar o e-mail a busca publica,
+   * esta segunda passa a devolver 1 e o fluxo acusa na hora.
+   *
+   * Por que importa: a projecao publica omite o e-mail de proposito. Se a busca
+   * o aceitasse, qualquer pessoa poderia digitar um endereco e descobrir, pelo
+   * acerto ou pelo vazio, se ele pertence a um docente — o dado nao sairia na
+   * resposta, mas a resposta o confirmaria.
+   */
+  const primeiroNome = professor.email.split('.')[0];
+
+  const buscaComToken = await esperarSucesso(
+    'Busca de professor por nome, com token',
+    api('GET', `/professores?busca=${primeiroNome}&limite=100`, { token: professor.token }),
+  );
+
+  if (buscaComToken.dados.some((p) => p.id === professor.id)) {
+    ok('A busca autenticada encontra por nome', `${buscaComToken.meta.total} resultado(s)`);
+  } else {
+    falhou('A busca autenticada nao encontrou o professor pelo nome');
+  }
+
+  const porEmailComToken = await esperarSucesso(
+    'Busca de professor pelo e-mail completo, com token',
+    api('GET', `/professores?busca=${encodeURIComponent(professor.email)}`, {
+      token: professor.token,
+    }),
+  );
+
+  if (porEmailComToken.dados.some((p) => p.email === professor.email)) {
+    ok('A busca autenticada encontra por e-mail');
+  } else {
+    falhou('A busca autenticada nao encontrou o professor pelo e-mail');
+  }
+
+  const porNomePublico = await esperarSucesso(
+    'Busca publica de professor por nome, SEM token',
+    api('GET', `/professores/publicos?busca=${primeiroNome}&limite=100`),
+  );
+
+  if (porNomePublico.dados.some((p) => p.usuarioId === professor.id)) {
+    ok('A busca publica encontra por nome', `${porNomePublico.meta.total} resultado(s)`);
+  } else {
+    falhou('A busca publica nao encontrou o professor pelo nome');
+  }
+
+  const porEmailPublico = await esperarSucesso(
+    'Busca publica pelo MESMO e-mail, SEM token',
+    api('GET', `/professores/publicos?busca=${encodeURIComponent(professor.email)}`),
+  );
+
+  if (porEmailPublico.meta.total === 0) {
+    ok('A rota publica NAO confirma e-mail de docente', '0 resultados, como deve ser');
+  } else {
+    falhou(
+      'A busca publica confirmou um e-mail',
+      `${porEmailPublico.meta.total} resultado(s) para ${professor.email}`,
+    );
+  }
+
+  await esperarRecusa(
+    'Termo de busca acima de 150 caracteres e recusado (400)',
+    400,
+    api('GET', `/professores?busca=${'a'.repeat(151)}`, { token: professor.token }),
+  );
+
+  await esperarRecusa(
+    'Termo acima de 150 caracteres tambem e recusado na rota publica (400)',
+    400,
+    api('GET', `/professores/publicos?busca=${'a'.repeat(151)}`),
   );
 
   /** ------------------------------------------------- inscricao publica */
@@ -2315,9 +2414,18 @@ async function verificarEditais({ professor, monitorado, curso, cursoVizinho, di
     apiArquivo('POST', rota, {
       campos: {
         ...base,
+        /**
+         * Mesma disciplina da inscricao seguinte, e com o E-MAIL e a MATRICULA
+         * reais do aluno. Os dois detalhes sao o que a aprovacao precisa: a
+         * disciplina compartilhada nao tem monitoria aberta a mao, e o e-mail
+         * existente e a chave pela qual a conta e reaproveitada.
+         */
+        disciplinaId: compartilhada.id,
+        /** Indicada a Prof Maria: a monitoria tem de nascer no nome DELA. */
+        professorId: profMaria.id,
         nomeCompleto: 'Carlos Monitorado Pereira',
         matricula: matriculaDoAluno,
-        email: `jacadastrado.${SUFIXO}@ufx.edu.br`,
+        email: monitorado.email,
         n1: '7',
         n2: '6',
       },
@@ -2336,6 +2444,52 @@ async function verificarEditais({ professor, monitorado, curso, cursoVizinho, di
         email: `semnotas.${SUFIXO}@ufx.edu.br`,
         n1: '',
         n2: '',
+      },
+    }),
+  );
+
+  /**
+   * Uma candidatura em OUTRA disciplina.
+   *
+   * Sem ela o edital teria um grupo so e o agrupamento passaria por acidente:
+   * um resumo que ignorasse o GROUP BY devolveria exatamente a mesma linha.
+   * `compartilhada` e oferecida pelo curso do candidato, entao a FK composta
+   * aceita.
+   */
+  const inscricaoDeOutraDisciplina = await esperarSucesso(
+    'Inscricao em uma segunda disciplina do mesmo edital',
+    apiArquivo('POST', rota, {
+      campos: {
+        ...base,
+        disciplinaId: compartilhada.id,
+        /** Mesma indicacao da outra, para a oferta ser a mesma e ser reusada. */
+        professorId: profMaria.id,
+        turno: 'VESPERTINO',
+        nomeCompleto: 'Candidato Outra Disciplina',
+        matricula: `CE${SUFIXO}`,
+        email: `outradisc.${SUFIXO}@ufx.edu.br`,
+        n1: '10',
+        n2: '9',
+      },
+    }),
+  );
+
+  /**
+   * Terceira candidatura na disciplina compartilhada, indicando o professor de
+   * BOOTSTRAP — e nao a Prof Maria. A oferta dela, portanto, e outra, e e nela
+   * que a ADOCAO de monitoria vai ser exercitada.
+   */
+  const inscricaoParaAdocao = await esperarSucesso(
+    'Inscricao cuja oferta tera monitoria aberta a mao',
+    apiArquivo('POST', rota, {
+      campos: {
+        ...base,
+        disciplinaId: compartilhada.id,
+        nomeCompleto: 'Candidato Da Adocao',
+        matricula: `CF${SUFIXO}`,
+        email: `adocao.${SUFIXO}@ufx.edu.br`,
+        n1: '5',
+        n2: '5',
       },
     }),
   );
@@ -2364,10 +2518,10 @@ async function verificarEditais({ professor, monitorado, curso, cursoVizinho, di
     api('GET', `/inscricoes?editalId=${edital.id}&limite=100`, { token: professor.token }),
   );
 
-  if (lista.meta.total === 3) {
-    ok('As 3 inscricoes validas estao na lista');
+  if (lista.meta.total === 5) {
+    ok('As 5 inscricoes validas estao na lista');
   } else {
-    falhou(`Esperava 3 inscricoes, veio ${lista.meta.total}`);
+    falhou(`Esperava 5 inscricoes, veio ${lista.meta.total}`);
   }
 
   const principal = lista.dados.find((i) => i.id === inscricao.id);
@@ -2431,7 +2585,7 @@ async function verificarEditais({ professor, monitorado, curso, cursoVizinho, di
     }),
   );
 
-  if (porCurso.meta.total === 3 && porCursoVizinho.meta.total === 0) {
+  if (porCurso.meta.total === 5 && porCursoVizinho.meta.total === 0) {
     ok('Filtro por curso separa os conjuntos');
   } else {
     falhou(`Filtro por curso: ${porCurso.meta.total} e ${porCursoVizinho.meta.total}`);
@@ -2444,7 +2598,7 @@ async function verificarEditais({ professor, monitorado, curso, cursoVizinho, di
     }),
   );
 
-  if (porDisciplina.meta.total === 3) {
+  if (porDisciplina.meta.total === 2) {
     ok('Filtro por disciplina recorta corretamente');
   } else {
     falhou(`Filtro por disciplina trouxe ${porDisciplina.meta.total}`);
@@ -2457,10 +2611,19 @@ async function verificarEditais({ professor, monitorado, curso, cursoVizinho, di
     }),
   );
 
-  if (porProfessor.meta.total === 3) {
-    ok('Filtro por professor responsavel recorta corretamente');
+  const porProfessorIndicado = await esperarSucesso(
+    'Filtro pelo outro professor responsavel',
+    api('GET', `/inscricoes?professorId=${profMaria.id}&editalId=${edital.id}`, {
+      token: professor.token,
+    }),
+  );
+
+  if (porProfessor.meta.total === 3 && porProfessorIndicado.meta.total === 2) {
+    ok('Filtro por professor responsavel separa as indicacoes', '3 + 2');
   } else {
-    falhou(`Filtro por professor trouxe ${porProfessor.meta.total}`);
+    falhou(
+      `Filtro por professor: ${porProfessor.meta.total} e ${porProfessorIndicado.meta.total}`,
+    );
   }
 
   const porBusca = await esperarSucesso(
@@ -2497,7 +2660,7 @@ async function verificarEditais({ professor, monitorado, curso, cursoVizinho, di
     api('GET', '/inscricoes?ano=2027&semestre=1', { token: professor.token }),
   );
 
-  if (porPeriodo.meta.total >= 3 && porPeriodoErrado.meta.total === 0) {
+  if (porPeriodo.meta.total >= 5 && porPeriodoErrado.meta.total === 0) {
     ok('Filtro por periodo do edital funciona pelo JOIN');
   } else {
     falhou(`Periodo: ${porPeriodo.meta.total} e ${porPeriodoErrado.meta.total}`);
@@ -2520,13 +2683,13 @@ async function verificarEditais({ professor, monitorado, curso, cursoVizinho, di
   const mediasDesc = desc.dados.map((i) => i.media);
   const mediasAsc = asc.dados.map((i) => i.media);
 
-  if (JSON.stringify(mediasDesc) === JSON.stringify([8.88, 6.5, null])) {
+  if (JSON.stringify(mediasDesc) === JSON.stringify([9.5, 8.88, 6.5, 5, null])) {
     ok('DESC: maior media primeiro, nota ausente no fim', JSON.stringify(mediasDesc));
   } else {
     falhou('Ordem decrescente inesperada', JSON.stringify(mediasDesc));
   }
 
-  if (JSON.stringify(mediasAsc) === JSON.stringify([6.5, 8.88, null])) {
+  if (JSON.stringify(mediasAsc) === JSON.stringify([5, 6.5, 8.88, 9.5, null])) {
     ok('ASC: menor media primeiro, nota ausente AINDA no fim', JSON.stringify(mediasAsc));
   } else {
     falhou('Ordem crescente inesperada', JSON.stringify(mediasAsc));
@@ -2575,11 +2738,356 @@ async function verificarEditais({ professor, monitorado, curso, cursoVizinho, di
 
   const repetida = pagina1.dados.some((a) => pagina2.dados.some((b) => a.id === b.id));
 
-  if (pagina1.dados.length === 2 && pagina2.dados.length === 1 && !repetida) {
+  if (pagina1.dados.length === 2 && pagina2.dados.length === 2 && !repetida) {
     ok('Paginacao no banco, sem item repetido entre paginas');
   } else {
     falhou('Paginacao inconsistente', `${pagina1.dados.length} + ${pagina2.dados.length}`);
   }
+
+
+  /** ------------------------------------------- resumo agrupado por disciplina */
+
+  await esperarRecusa('Resumo sem token (401)', 401, api('GET', '/inscricoes/resumo'));
+  await esperarRecusa(
+    'ALUNO nao consulta o resumo (403)',
+    403,
+    api('GET', '/inscricoes/resumo', { token: monitorado.token }),
+  );
+
+  const resumo = await esperarSucesso(
+    'Professor consulta o resumo por disciplina',
+    api('GET', `/inscricoes/resumo?editalId=${edital.id}`, { token: professor.token }),
+  );
+
+  if (Array.isArray(resumo) && resumo.length === 2) {
+    ok('O resumo traz um grupo por disciplina', resumo.map((g) => g.disciplina.codigo).join(' + '));
+  } else {
+    falhou('Agrupamento inesperado', JSON.stringify(resumo).slice(0, 160));
+  }
+
+  const somaDosGrupos = resumo.reduce((total, grupo) => total + grupo.totalInscricoes, 0);
+
+  if (somaDosGrupos === lista.meta.total) {
+    ok('A soma dos grupos e o total do edital', `${somaDosGrupos} = ${lista.meta.total}`);
+  } else {
+    falhou(`Soma dos grupos ${somaDosGrupos} != total ${lista.meta.total}`);
+  }
+
+  /**
+   * O CONTRATO do resumo: cada total e o que o endpoint plano devolve para
+   * aquela disciplina. Se os dois discordarem, o cabecalho do acordeao mente —
+   * e e o cabecalho que a banca le antes de abrir o grupo.
+   */
+  let totaisConferem = true;
+
+  for (const grupo of resumo) {
+    const doGrupo = await api(
+      'GET',
+      `/inscricoes?editalId=${edital.id}&disciplinaId=${grupo.disciplina.id}&limite=100`,
+      { token: professor.token },
+    );
+
+    if (doGrupo.dados?.meta?.total !== grupo.totalInscricoes) {
+      totaisConferem = false;
+      falhou(
+        `Grupo ${grupo.disciplina.codigo}: resumo diz ${grupo.totalInscricoes}, ` +
+          `lista diz ${doGrupo.dados?.meta?.total}`,
+      );
+    }
+  }
+
+  if (totaisConferem) {
+    ok('Cada total do resumo bate com a listagem daquela disciplina');
+  }
+
+  if (resumo.every((g) => g.monitoriaCadastrada === false && g.monitoriaId === null)) {
+    ok('Antes de aprovar, nenhuma disciplina tem monitoria cadastrada');
+  } else {
+    falhou('Grupo marcado como resolvido antes de qualquer aprovacao', JSON.stringify(resumo));
+  }
+
+  const comESemMedia = resumo.every((g) => g.comMedia + g.semMedia === g.totalInscricoes);
+
+  if (comESemMedia) {
+    ok('comMedia + semMedia = totalInscricoes em todos os grupos');
+  } else {
+    falhou('As contagens de media nao fecham', JSON.stringify(resumo));
+  }
+
+  /** O candidato sem notas tem de aparecer como `semMedia`, nunca como media zero. */
+  const grupoDaPrimeira = resumo.find((g) => g.disciplina.id === disciplina.id);
+
+  if (grupoDaPrimeira?.semMedia === 1 && grupoDaPrimeira?.melhorMedia === 8.88) {
+    ok('Nota ausente conta em semMedia e nao afeta a melhor media', `${grupoDaPrimeira.semMedia}`);
+  } else {
+    falhou('Resumo da disciplina principal inesperado', JSON.stringify(grupoDaPrimeira));
+  }
+
+  /** Os filtros tem de valer no resumo, senao o cabecalho descreve outro recorte. */
+  const resumoFiltrado = await esperarSucesso(
+    'Resumo com filtro de turno',
+    api('GET', `/inscricoes/resumo?editalId=${edital.id}&turno=VESPERTINO`, {
+      token: professor.token,
+    }),
+  );
+
+  if (
+    resumoFiltrado.length === 1 &&
+    resumoFiltrado[0].disciplina.id === compartilhada.id &&
+    resumoFiltrado[0].totalInscricoes === 1
+  ) {
+    ok('O filtro recorta o resumo do mesmo jeito que recorta a lista');
+  } else {
+    falhou('Resumo filtrado inesperado', JSON.stringify(resumoFiltrado));
+  }
+
+  /**
+   * O resumo nao pagina, e isso tem de ser EXPLICITO: `forbidNonWhitelisted`
+   * devolve 400 em vez de aceitar `pagina` e ignorar em silencio.
+   */
+  for (const parametro of ['pagina=2', 'limite=5', 'ordenarPor=media', 'direcao=asc']) {
+    await esperarRecusa(
+      `Resumo recusa ${parametro.split('=')[0]} (400)`,
+      400,
+      api('GET', `/inscricoes/resumo?${parametro}`, { token: professor.token }),
+    );
+  }
+
+  const resumoVazio = await esperarSucesso(
+    'Resumo de um edital sem candidatura',
+    api('GET', `/inscricoes/resumo?editalId=${editalFuturo.id}`, { token: professor.token }),
+  );
+
+  if (Array.isArray(resumoVazio) && resumoVazio.length === 0) {
+    ok('Edital sem candidatura devolve lista vazia, nao erro');
+  } else {
+    falhou('Resumo vazio inesperado', JSON.stringify(resumoVazio));
+  }
+
+
+
+  /**
+   * `professorId` mora no DTO de criacao de monitoria, mas e preenchido pelo
+   * CONTROLLER. Se o cliente puder manda-lo, qualquer professor cria monitoria
+   * no nome de outro por `POST /monitorias` — e e justamente por isso que o
+   * campo nao tem decorator de validacao: o `forbidNonWhitelisted` o recusa.
+   */
+  await esperarRecusa(
+    'Cliente NAO escolhe o professor da monitoria (400)',
+    400,
+    api('POST', '/monitorias', {
+      token: professor.token,
+      corpo: {
+        disciplinaId: compartilhada.id,
+        professorId: profMaria.id,
+        ano: 2028,
+        semestre: 1,
+      },
+    }),
+  );
+
+  /**
+   * Monitoria aberta A MAO para a oferta de `inscricaoParaAdocao`, antes de
+   * qualquer aprovacao. E o fluxo do professor que prepara a monitoria e so
+   * depois roda a selecao — e o que a aprovacao vai ADOTAR, em vez de recusar.
+   */
+  const semEdital = await esperarSucesso(
+    'Criar monitoria direta continua funcionando (sem edital)',
+    api('POST', '/monitorias', {
+      token: professor.token,
+      corpo: { disciplinaId: compartilhada.id, ano: 2026, semestre: 2 },
+    }),
+  );
+
+  if (semEdital.editalId === null) {
+    ok('Monitoria criada direto nasce com editalId nulo');
+  } else {
+    falhou('editalId inesperado em monitoria sem edital', String(semEdital.editalId));
+  }
+
+  /** ----------------------------------- aprovacao: a selecao vira monitoria */
+
+  await esperarRecusa(
+    'Aprovar sem token (401)',
+    401,
+    api('POST', `/inscricoes/${inscricao.id}/aprovar`),
+  );
+
+  await esperarRecusa(
+    'ALUNO nao aprova candidatura (403)',
+    403,
+    api('POST', `/inscricoes/${inscricao.id}/aprovar`, { token: monitorado.token }),
+  );
+
+  /**
+   * A oferta da disciplina principal tem monitoria deste professor em 2026/2 —
+   * a da secao 2, que a secao 9 ENCERROU. Reaproveitar uma monitoria encerrada
+   * nao e opcao: ela nao aceita participante. A recusa vem ANTES de gravar
+   * `edital_id`, senao o resumo passaria a mostrar "monitoria aberta, monitor
+   * pendente" em um caso em que nenhuma tentativa vai funcionar.
+   */
+  await esperarRecusa(
+    'Aprovar com a monitoria da oferta ENCERRADA e recusado (409)',
+    409,
+    api('POST', `/inscricoes/${inscricao.id}/aprovar`, { token: professor.token }),
+  );
+
+  const aprovacao = await esperarSucesso(
+    'Professor aprova o candidato SEM conta',
+    api('POST', `/inscricoes/${inscricaoDeOutraDisciplina.id}/aprovar`, {
+      token: professor.token,
+    }),
+  );
+
+  if (
+    aprovacao.monitoria?.origem === 'CRIADA' &&
+    aprovacao.monitor?.contaCriada === true &&
+    aprovacao.monitoria.ano === 2026 &&
+    aprovacao.monitoria.semestre === 2
+  ) {
+    ok('Monitoria e conta criadas, com o periodo do edital', `monitoria ${aprovacao.monitoria.id}`);
+  } else {
+    falhou('Aprovacao com resultado inesperado', JSON.stringify(aprovacao));
+  }
+
+  const gravado = await conferirAprovacao(aprovacao, edital.id);
+
+  if (gravado.editalDaMonitoria === edital.id) {
+    ok('A monitoria aponta para o edital que a originou');
+  } else {
+    falhou('monitorias.edital_id nao foi preenchido', String(gravado.editalDaMonitoria));
+  }
+
+  if (
+    gravado.professorDaMonitoria === profMaria.id &&
+    gravado.professorDaMonitoria !== professor.id
+  ) {
+    ok('O responsavel e o professor INDICADO na inscricao, nao quem aprovou');
+  } else {
+    falhou('Responsavel inesperado', String(gravado.professorDaMonitoria));
+  }
+
+  /**
+   * O ato, porem, e de quem aprovou. Os dois valores juntos sao a trilha: a
+   * monitoria e da Prof Maria, e a habilitacao partiu de quem conduziu a banca.
+   */
+  if (gravado.vinculo?.habilitado_por === professor.id) {
+    ok('A habilitacao ficou registrada no nome de quem aprovou');
+  } else {
+    falhou('habilitado_por inesperado', JSON.stringify(gravado.vinculo));
+  }
+
+  if (gravado.vinculo?.papel === 'MONITOR' && gravado.vinculo?.status === 'ATIVO') {
+    ok('O candidato virou MONITOR ativo da monitoria');
+  } else {
+    falhou('Vinculo de monitor inesperado', JSON.stringify(gravado.vinculo));
+  }
+
+  if (gravado.contaDoCandidato?.matricula === `CE${SUFIXO}`) {
+    ok('A conta nasceu com os dados da inscricao', gravado.contaDoCandidato.email);
+  } else {
+    falhou('Conta criada com dados divergentes', JSON.stringify(gravado.contaDoCandidato));
+  }
+
+  /**
+   * Segundo aprovado da MESMA disciplina, e com e-mail que ja tem conta. Os
+   * dois reaproveitamentos acontecem de uma vez: a monitoria nao e recriada
+   * (seria impossivel) e o aluno nao e cadastrado de novo.
+   */
+  const usuariosAntes = await contarUsuarios();
+
+  const segunda = await esperarSucesso(
+    'Professor aprova o candidato que JA tem conta',
+    api('POST', `/inscricoes/${inscricaoDeAluno.id}/aprovar`, { token: professor.token }),
+  );
+
+  if (segunda.monitoria?.origem === 'REUSADA' && segunda.monitoria.id === aprovacao.monitoria.id) {
+    ok('A monitoria da disciplina foi reaproveitada, nao duplicada');
+  } else {
+    falhou('Criou monitoria duplicada para a mesma oferta', JSON.stringify(segunda.monitoria));
+  }
+
+  if (segunda.monitor?.contaCriada === false && segunda.monitor.usuarioId === monitorado.id) {
+    ok('A conta existente foi reaproveitada pelo e-mail da inscricao');
+  } else {
+    falhou('Nao reaproveitou a conta', JSON.stringify(segunda.monitor));
+  }
+
+  if ((await contarUsuarios()) === usuariosAntes) {
+    ok('Nenhum usuario novo foi criado na segunda aprovacao');
+  } else {
+    falhou('A segunda aprovacao criou identidade');
+  }
+
+  await esperarRecusa(
+    'Aprovar de novo quem ja e monitor e recusado (409, RN09)',
+    409,
+    api('POST', `/inscricoes/${inscricaoDeAluno.id}/aprovar`, { token: professor.token }),
+  );
+
+  /**
+   * ADOCAO: a oferta ja tinha monitoria aberta a mao, sem edital. A aprovacao
+   * usa aquela mesma monitoria e grava nela a procedencia — e e por isso que a
+   * marca de "resolvido" no resumo passa a valer. Recusar aqui pediria trabalho
+   * manual sem razao de dominio: a oferta e a mesma e o banco garante que
+   * existe so uma.
+   */
+  const adocao = await esperarSucesso(
+    'Professor aprova em oferta com monitoria aberta a mao',
+    api('POST', `/inscricoes/${inscricaoParaAdocao.id}/aprovar`, { token: professor.token }),
+  );
+
+  if (adocao.monitoria?.origem === 'ADOTADA' && adocao.monitoria.id === semEdital.id) {
+    ok('A monitoria aberta a mao foi ADOTADA, nao duplicada', semEdital.id);
+  } else {
+    falhou('Adocao inesperada', JSON.stringify(adocao.monitoria));
+  }
+
+  const adotada = await conferirAprovacao(adocao, edital.id);
+
+  if (adotada.editalDaMonitoria === edital.id) {
+    ok('A adocao gravou o edital na monitoria que ja existia');
+  } else {
+    falhou('edital_id nao foi gravado na adocao', String(adotada.editalDaMonitoria));
+  }
+
+  if (adotada.professorDaMonitoria === professor.id) {
+    ok('A adocao NAO trocou o dono da monitoria');
+  } else {
+    falhou('A adocao mexeu no responsavel', String(adotada.professorDaMonitoria));
+  }
+
+  /** O resumo passa a distinguir o que foi resolvido do que falta. */
+  const resumoDepois = await esperarSucesso(
+    'Resumo depois das aprovacoes',
+    api('GET', `/inscricoes/resumo?editalId=${edital.id}`, { token: professor.token }),
+  );
+
+  const resolvido = resumoDepois.find((g) => g.disciplina.id === compartilhada.id);
+  const pendente = resumoDepois.find((g) => g.disciplina.id === disciplina.id);
+
+  if (resolvido?.monitoriaCadastrada === true && resolvido.monitoresHabilitados === 2) {
+    ok('O grupo resolvido aparece com os dois monitores', resolvido.disciplina.codigo);
+  } else {
+    falhou('Grupo resolvido inesperado', JSON.stringify(resolvido));
+  }
+
+  if (pendente?.monitoriaCadastrada === false && pendente.monitoriaId === null) {
+    ok('O grupo sem aprovacao continua pendente', pendente.disciplina.codigo);
+  } else {
+    falhou('Grupo pendente inesperado', JSON.stringify(pendente));
+  }
+
+  /**
+   * A monitoria criada a mao na secao 2 nao pode acender o flag: ela e da
+   * mesma disciplina e do mesmo periodo, mas tem `edital_id` nulo.
+   */
+  if (pendente?.monitoresHabilitados === 0) {
+    ok('Monitoria aberta fora do edital nao conta como resolvida pelo edital');
+  } else {
+    falhou('Monitoria sem edital contou no resumo', JSON.stringify(pendente));
+  }
+
 
   /** ------------------------------------------------------------- detalhe */
 
@@ -2700,10 +3208,10 @@ async function verificarEditais({ professor, monitorado, curso, cursoVizinho, di
     api('GET', `/inscricoes?editalId=${edital.id}`, { token: professor.token }),
   );
 
-  if (inscricoesDoExcluido.meta.total === 3) {
+  if (inscricoesDoExcluido.meta.total === 5) {
     ok('Exclusao do edital nao apagou candidatura nenhuma (RN10)');
   } else {
-    falhou(`Esperava 3 inscricoes preservadas, veio ${inscricoesDoExcluido.meta.total}`);
+    falhou(`Esperava 5 inscricoes preservadas, veio ${inscricoesDoExcluido.meta.total}`);
   }
 
   const reativado = await esperarSucesso(
@@ -2854,6 +3362,55 @@ async function editalAindaNoBanco(editalId) {
   try {
     const { rows } = await cliente.query('SELECT ativo FROM editais WHERE id = $1', [editalId]);
     return rows[0] ?? null;
+  } finally {
+    await cliente.end();
+  }
+}
+
+/** Le, direto do banco, o que a aprovacao gravou nas tres tabelas. */
+async function conferirAprovacao(aprovacao, editalId) {
+  const cliente = await conectarAoBanco();
+
+  try {
+    const { rows: monitorias } = await cliente.query(
+      'SELECT edital_id, professor_id FROM monitorias WHERE id = $1',
+      [aprovacao.monitoria.id],
+    );
+
+    const { rows: vinculos } = await cliente.query(
+      `SELECT papel, status, habilitado_por_usuario_id AS habilitado_por
+         FROM monitoria_participantes
+        WHERE monitoria_id = $1 AND aluno_id = $2`,
+      [aprovacao.monitoria.id, aprovacao.monitor.usuarioId],
+    );
+
+    const { rows: contas } = await cliente.query(
+      `SELECT u.email, a.matricula, a.curso_id
+         FROM usuarios u JOIN alunos a ON a.usuario_id = u.id
+        WHERE u.id = $1`,
+      [aprovacao.monitor.usuarioId],
+    );
+
+    void editalId;
+
+    return {
+      editalDaMonitoria: monitorias[0]?.edital_id,
+      professorDaMonitoria: monitorias[0]?.professor_id,
+      vinculo: vinculos[0] ?? null,
+      contaDoCandidato: contas[0] ?? null,
+    };
+  } finally {
+    await cliente.end();
+  }
+}
+
+/** A prova de que reaproveitar a conta nao cria identidade nova. */
+async function contarUsuarios() {
+  const cliente = await conectarAoBanco();
+
+  try {
+    const { rows } = await cliente.query('SELECT count(*)::int AS total FROM usuarios');
+    return rows[0].total;
   } finally {
     await cliente.end();
   }
