@@ -1257,6 +1257,8 @@ async function main() {
     }),
   );
 
+  await verificarCargaHorariaERelatorio({ professor, monitora, monitorado, monitoria });
+
   secao('9. Encerramento preserva o historico');
   const pendente = await esperarSucesso(
     'Ana abre mais uma sessao, que fica AGENDADA',
@@ -3414,6 +3416,250 @@ async function contarUsuarios() {
   } finally {
     await cliente.end();
   }
+}
+
+/**
+ * Carga horaria do monitor e relatorio em .docx.
+ *
+ * Roda ANTES da secao 9 de proposito: o encerramento da monitoria encerra os
+ * vinculos, e sem vinculo ATIVO o monitor deixa de poder baixar o relatorio —
+ * que e o comportamento correto, mas tornaria estas verificacoes impossiveis.
+ *
+ * A carga horaria e conferida contra o BANCO, nao contra um numero esperado: o
+ * script soma (fim - inicio) dos atendimentos REALIZADOS por SQL e exige que a
+ * API devolva o mesmo. Fixar "60 minutos" passaria a falhar na primeira
+ * mudanca do roteiro e nao provaria que a conta esta certa.
+ */
+async function verificarCargaHorariaERelatorio({ professor, monitora, monitorado, monitoria }) {
+  secao('8f. Carga horaria do monitor e relatorio em .docx');
+
+  const indicadores = await esperarSucesso(
+    'Indicadores dos monitores da monitoria',
+    api('GET', `/analytics/monitorias/${monitoria.id}/monitores`, { token: professor.token }),
+  );
+
+  const daMonitora = indicadores.find((m) => m.usuarioId === monitora.id);
+  const esperado = await somarCargaHorariaNoBanco(monitoria.id, monitora.id);
+
+  if (daMonitora?.cargaHorariaMinutos === esperado.minutos) {
+    ok('Carga horaria bate com a soma dos REALIZADOS no banco', `${esperado.minutos} min`);
+  } else {
+    falhou(
+      `Carga horaria divergente: API ${daMonitora?.cargaHorariaMinutos}, banco ${esperado.minutos}`,
+    );
+  }
+
+  if (daMonitora?.cargaHorariaHoras === Math.round((esperado.minutos / 60) * 100) / 100) {
+    ok('Horas coerentes com os minutos', `${daMonitora.cargaHorariaHoras} h`);
+  } else {
+    falhou('Horas e minutos discordam', JSON.stringify(daMonitora));
+  }
+
+  /**
+   * O que NAO pode entrar na conta: o atendimento CANCELADO da secao 7 e os
+   * AGENDADOS. Se algum entrasse, a soma da API ficaria maior que a do banco —
+   * que filtra por REALIZADO —, e a comparacao acima acusaria. Esta verificacao
+   * torna explicito que ha o que excluir.
+   */
+  if (esperado.ignorados > 0) {
+    ok('Ha atendimentos fora da conta (cancelados/agendados)', `${esperado.ignorados} ignorado(s)`);
+  } else {
+    falhou('O roteiro nao produziu atendimento a ser ignorado — a verificacao perde sentido');
+  }
+
+  /** ------------------------------------------------- relatorio em .docx */
+
+  await esperarRecusa(
+    'Baixar relatorio sem token (401)',
+    401,
+    api('GET', `/monitorias/${monitoria.id}/relatorio`),
+  );
+
+  await esperarRecusa(
+    'MONITORADO nao baixa o relatorio da monitoria (403)',
+    403,
+    api('GET', `/monitorias/${monitoria.id}/relatorio`, { token: monitorado.token }),
+  );
+
+  /**
+   * O professor responsavel tambem e recusado, e isso e decisao: o relatorio
+   * final e documento PESSOAL do monitor, que o professor assina como
+   * orientador. Com varios monitores na mesma monitoria, "o relatorio do
+   * professor" seria ambiguo.
+   */
+  await esperarRecusa(
+    'Professor responsavel NAO baixa o relatorio do monitor (403)',
+    403,
+    api('GET', `/monitorias/${monitoria.id}/relatorio`, { token: professor.token }),
+  );
+
+  const resposta = await fetch(`${BASE}/monitorias/${monitoria.id}/relatorio`, {
+    headers: { Authorization: `Bearer ${monitora.token}` },
+  });
+
+  const bytes = Buffer.from(await resposta.arrayBuffer());
+  const disposicao = resposta.headers.get('content-disposition') ?? '';
+  const tipo = resposta.headers.get('content-type') ?? '';
+
+  if (
+    resposta.status === 200 &&
+    tipo.includes('wordprocessingml.document') &&
+    disposicao.startsWith('attachment;') &&
+    bytes.subarray(0, 2).toString() === 'PK'
+  ) {
+    ok('Monitor baixa o relatorio como .docx', `${bytes.length} bytes | ${disposicao}`);
+  } else {
+    falhou('Download do relatorio fora do esperado', `HTTP ${resposta.status} | ${tipo}`);
+  }
+
+  /**
+   * A prova real: ABRIR o arquivo baixado e conferir o conteudo. Testar apenas
+   * o cabecalho HTTP provaria que algo binario chegou, nao que e um documento
+   * Word preenchido com os dados certos.
+   */
+  const conferido = await conferirDocx(bytes, monitoria.id);
+
+  if (conferido.entradas === conferido.entradasDoModelo) {
+    ok('O pacote gerado tem as mesmas partes do modelo', `${conferido.entradas} entradas`);
+  } else {
+    falhou(
+      `Partes do pacote divergem: ${conferido.entradas} contra ${conferido.entradasDoModelo}`,
+    );
+  }
+
+  if (conferido.texto.includes(`MONITOR(A): ${monitora.nome}`)) {
+    ok('O nome do monitor autenticado esta no documento', monitora.nome);
+  } else {
+    falhou('Nome do monitor ausente do documento', monitora.nome);
+  }
+
+  /**
+   * Para os demais, a verificacao e "o paragrafo cresceu alem do rotulo" em vez
+   * de um nome fixo: o roteiro nao conhece o nome do professor de bootstrap, e
+   * fixar um valor faria a verificacao depender do seeder em vez do codigo.
+   */
+  const rotulosPreenchidos = [
+    'PROFESSOR-ORIENTADOR(A): ',
+    'CURSO: ',
+    'DISCIPLINA:',
+    'MATRÍCULA DO ALUNO-MONITOR(A): ',
+    'EMAIL: ',
+  ];
+
+  const vazios = rotulosPreenchidos.filter((rotulo) =>
+    conferido.paragrafos.every((p) => !p.startsWith(rotulo) || p.trim() === rotulo.trim()),
+  );
+
+  if (vazios.length === 0) {
+    ok('Identificacao preenchida no documento', `${rotulosPreenchidos.length} campos`);
+  } else {
+    falhou('Campos nao preenchidos no documento', vazios.join(' | '));
+  }
+
+  /** O modelo traz exemplos de outra pessoa: nenhum pode chegar ao relatorio. */
+  if (!conferido.texto.includes('Farmacologia da Esquizofrenia')) {
+    ok('As linhas de exemplo do modelo foram removidas');
+  } else {
+    falhou('O relatorio saiu com dados de exemplo do modelo');
+  }
+
+  /** Campos de relato e dados que o sistema nao tem continuam vazios. */
+  const emBranco = ['TURNO:', 'TELEFONE: ', 'QUANTIDADE DE ALUNOS NA TURMA:'];
+  const preenchidosIndevidamente = emBranco.filter(
+    (rotulo) => !conferido.paragrafos.includes(rotulo),
+  );
+
+  if (preenchidosIndevidamente.length === 0) {
+    ok('Campos sem dado no sistema ficaram em branco', emBranco.join(' | '));
+  } else {
+    falhou('Campo preenchido com palpite', preenchidosIndevidamente.join(' | '));
+  }
+
+  if (conferido.texto.includes(`${esperado.minutos > 0 ? 'registrado no sistema' : ''}`)) {
+    ok('A carga horaria acumulada aparece no documento');
+  } else {
+    falhou('Carga horaria ausente do documento');
+  }
+
+  if (conferido.linhasVazias >= 5) {
+    ok('Sobraram linhas em branco para preenchimento manual', `${conferido.linhasVazias}`);
+  } else {
+    falhou(`Poucas linhas em branco na tabela: ${conferido.linhasVazias}`);
+  }
+}
+
+/** Soma a carga horaria pelo banco, para comparar com o que a API devolve. */
+async function somarCargaHorariaNoBanco(monitoriaId, alunoId) {
+  const cliente = await conectarAoBanco();
+
+  try {
+    const { rows } = await cliente.query(
+      `SELECT
+         COALESCE(ROUND(SUM(EXTRACT(EPOCH FROM (a.fim - a.inicio)))
+           FILTER (WHERE a.status = 'REALIZADO') / 60), 0)::int AS minutos,
+         COUNT(*) FILTER (WHERE a.status <> 'REALIZADO')::int   AS ignorados
+       FROM atendimentos a
+       JOIN monitoria_participantes mp ON mp.id = a.monitor_participante_id
+      WHERE mp.monitoria_id = $1 AND mp.aluno_id = $2`,
+      [monitoriaId, alunoId],
+    );
+
+    return rows[0];
+  } finally {
+    await cliente.end();
+  }
+}
+
+/**
+ * Abre o .docx baixado e devolve o que interessa conferir.
+ *
+ * Usa o jszip que o proprio backend usa — o .docx e um ZIP, e so abrindo da
+ * para afirmar que o documento tem as partes do modelo e o texto preenchido.
+ */
+async function conferirDocx(bytes, monitoriaId) {
+  const JSZip = (await import('jszip')).default;
+  const { readFile } = await import('node:fs/promises');
+
+  const pacote = await JSZip.loadAsync(bytes);
+  const modelo = await JSZip.loadAsync(
+    await readFile('dist/modules/relatorios/modelo/relatorio-monitoria.docx'),
+  );
+
+  const xml = await pacote.file('word/document.xml').async('string');
+
+  const decodificar = (t) =>
+    t
+      .replace(/&lt;/g, '<')
+      .replace(/&gt;/g, '>')
+      .replace(/&quot;/g, '"')
+      .replace(/&apos;/g, "'")
+      .replace(/&amp;/g, '&');
+
+  const paragrafos = (xml.match(/<w:p[\s>][\s\S]*?<\/w:p>/g) ?? []).map((bloco) =>
+    decodificar(
+      (bloco.match(/<w:t(?:\s[^>]*)?>[\s\S]*?<\/w:t>/g) ?? [])
+        .map((t) => t.replace(/<[^>]+>/g, ''))
+        .join(''),
+    ),
+  );
+
+  const linhas = (xml.match(/<w:tr[\s>][\s\S]*?<\/w:tr>/g) ?? []).map((tr) =>
+    (tr.match(/<w:tc>[\s\S]*?<\/w:tc>/g) ?? []).map((tc) =>
+      (tc.match(/<w:t(?:\s[^>]*)?>[\s\S]*?<\/w:t>/g) ?? [])
+        .map((t) => t.replace(/<[^>]+>/g, ''))
+        .join(''),
+    ),
+  );
+
+  void monitoriaId;
+
+  return {
+    entradas: Object.keys(pacote.files).length,
+    entradasDoModelo: Object.keys(modelo.files).length,
+    texto: paragrafos.join('\n'),
+    paragrafos,
+    linhasVazias: linhas.filter((l) => l.every((c) => !c)).length,
+  };
 }
 
 main().catch((erro) => {

@@ -57,5 +57,8 @@ temp/
 # TypeScript
 *.tsbuildinfo
 
+# Relatorios gerados pelo script de verificacao (o modelo em src/ e versionado)
+/relatorio-*.docx
+
 # Misc
 *.tgz

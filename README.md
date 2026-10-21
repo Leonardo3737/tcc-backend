@@ -222,7 +222,7 @@ sem `Bearer`). O `persistAuthorization` mantém o token entre recarregamentos.
 npm run test
 ```
 
-433 testes de unidade, sem banco, cobrindo o que o PostgreSQL **não** alcança:
+493 testes de unidade, sem banco, cobrindo o que o PostgreSQL **não** alcança:
 autorização, papéis, transições de estado, propriedade de recurso, campos
 derivados e tradução de erro.
 
@@ -243,6 +243,7 @@ derivados e tradução de erro.
 | `disciplinas.spec.ts` | geração do código (prefixo, acentos, numeração, largura) e nova tentativa quando a constraint recusa |
 | `email.spec.ts` | modo log sem credencial, payload e cabeçalhos do Brevo, timeout, recusa do provedor e falha de rede sem lançar; corpo nunca no log |
 | `recuperacao-senha.spec.ts` | anti-enumeração (resposta e custo idênticos), teto de tentativas, expiração, uso único, código e senha só como hash |
+| `relatorio-monitoria.spec.ts` | carga horária (minutos como unidade canônica, formatação), preenchimento sobre o modelo REAL do disco, remoção das linhas de exemplo, linhas em branco que sobram, escape de XML, pacote que só altera `document.xml` |
 | `aprovacao-de-inscricao.spec.ts` | a inscrição como única entrada; conta reaproveitada e nunca alterada; responsável é quem aprova, não quem o candidato indicou; período vindo do edital; reuso da monitoria da oferta; ordem dos passos que torna a operação repetível |
 | `professores.spec.ts` | busca na listagem de professores, e a assimetria entre as duas rotas: a pública varre menos campos, e nunca o e-mail |
 | `editais.spec.ts` | resumo por disciplina (valores sempre por `replacements`, `semMedia` derivado, melhor média nula em vez de zero), período de inscrições (incluindo PATCH parcial), exclusão lógica idempotente, validação do PDF por assinatura, `media` nunca enviada no INSERT, nota em branco que não vira zero, e-mail depois do commit cuja falha não desfaz nada, `NULLS LAST` nas duas direções e ausência do binário nas listagens |
@@ -287,7 +288,8 @@ backend recusa.
 | `LogsModule` | trilha de requisições (`@Global()`): interceptor, middleware e redação | `LogsService` |
 | `EmailModule` | serviço de e-mail (Brevo), ponto único de saída. `@Global()` | `EmailService` |
 | `GamificacaoModule` | pontuação e ranking (módulo folha) | `GamificacaoService` |
-| `AnalyticsModule` | indicadores agregados (somente leitura) | — |
+| `AnalyticsModule` | indicadores agregados, incluindo carga horária (somente leitura) | `AnalyticsService` |
+| `RelatoriosModule` | relatório final de monitoria em `.docx` (módulo folha, somente leitura) | — |
 | `CursosModule` | catálogo de cursos | `CursosService` |
 | `NotificacoesModule` | avisos por e-mail (outbox + agendador) | `NotificacoesService` |
 | `EditaisModule` | editais de seleção, inscrições públicas e boletim em PDF (módulo folha) | — |
@@ -1051,7 +1053,8 @@ e devolve zero na rota anônima.
 | `GET` | `/api/gamificacao/meus-pontos` | autenticado |
 | `GET` | `/api/analytics/resumo` | **PROFESSOR** |
 | `GET` | `/api/analytics/monitorias/:monitoriaId` | participante ou responsável |
-| `GET` | `/api/analytics/monitorias/:monitoriaId/monitores` | professor responsável |
+| `GET` | `/api/analytics/monitorias/:monitoriaId/monitores` | professor responsável — inclui `cargaHorariaMinutos`/`Horas` |
+| `GET` | `/api/monitorias/:monitoriaId/relatorio` | **MONITOR** com vínculo ativo — baixa o relatório final em `.docx` |
 
 ### Editais e inscrições
 
@@ -1511,6 +1514,199 @@ do arquivo.
 
 ---
 
+## Carga horária do monitor
+
+`GET /api/analytics/monitorias/:monitoriaId/monitores` ganhou dois campos, **sem
+remover nem alterar nenhum dos existentes**:
+
+| Campo | Significado |
+|---|---|
+`cargaHorariaMinutos` | soma de `(fim - inicio)` dos atendimentos **REALIZADOS** do monitor |
+`cargaHorariaHoras` | o mesmo valor em horas, com 2 casas, para exibição |
+
+### Calculada sob demanda, sem coluna de duração
+
+A alternativa era guardar a duração em `atendimentos`. **O schema já resolve
+tudo o que uma coluna resolveria**, e é isso que decide a questão:
+
+- `inicio` e `fim` são **NOT NULL** com `CHECK (fim > inicio)`. Não existe
+  atendimento sem término nem intervalo invertido — os dois casos que o pedido
+  manda excluir são **impossíveis**, não filtrados;
+- `ex_monitor_sem_conflito` é um `EXCLUDE USING gist` sobre
+  `(monitor_participante_id, tstzrange(inicio, fim))` com `WHERE status IN
+  ('AGENDADO','REALIZADO')`. Dois atendimentos contáveis do **mesmo monitor** não
+  podem se sobrepor. A soma é de intervalos disjuntos: não há tempo contado em
+  dobro;
+- não há `DELETE` em nenhum lugar da API (RN10), então "atendimentos excluídos"
+  não existe como caso;
+- `reagendar` altera `inicio`/`fim`. Uma coluna de duração passaria a precisar de
+  sincronia, e derivada que pode divergir da origem é exatamente o que este
+  projeto evita — quando guardar foi necessário (`inscricoes_edital.media`), só
+  ficou confiável como `GENERATED ALWAYS`. E uma coluna gerada
+  `(fim - inicio)` não adicionaria nada ao que `fim - inicio` já responde na
+  leitura.
+
+**Custo zero de consulta:** a soma entra no `GROUP BY` que já produz os outros
+indicadores de cada monitor. Não há consulta por monitor — era o risco apontado
+no pedido, e ele não existe aqui porque o indicador nasceu dentro da agregação
+que já existia.
+
+### Status considerados
+
+Somente **REALIZADO**. `AGENDADO` é compromisso futuro (ou sessão que o monitor
+ainda não registrou) e `CANCELADO` não aconteceu — e cancelado fica fora do
+`EXCLUDE`, podendo sobrepor um realizado, o que é um segundo motivo para
+excluí-lo.
+
+### Arredondamento
+
+A soma é feita em **segundos** no PostgreSQL e arredondada **uma vez**, no total.
+Arredondar por atendimento acumularia erro. A unidade canônica é o **minuto**,
+porque é exata: hora decimal não representa 1h20min sem dízima, e carga horária
+que não fecha na conta de quem assina o relatório é pior que uma unidade menos
+conveniente.
+
+---
+
+## Relatório final de monitoria (.docx)
+
+```
+GET /api/monitorias/:monitoriaId/relatorio     (somente o MONITOR)
+```
+
+Devolve o documento oficial preenchido, gerado **sob demanda** — nada é
+armazenado. O relatório é uma fotografia dos dados no instante do download, e
+guardar uma cópia criaria a pergunta "está desatualizada?" a cada atendimento
+novo.
+
+Disponível **a qualquer momento**, inclusive com a monitoria em andamento. Não há
+nenhuma verificação de encerramento a remover se um dia essa restrição for
+desejada.
+
+### Autorização
+
+`@ExigeParticipacao({ papeis: [MONITOR], professorResponsavel: 'NEGADO' })` sobre
+o `ParticipacaoGuard`, o mesmo mecanismo de materiais e disponibilidades. O
+vínculo vem do **token**; o relatório é do monitor autenticado. **Não existe
+parâmetro de monitor em lugar algum** — trocar o id na URL muda a monitoria, e aí
+o guard recusa.
+
+O professor responsável também é recusado, e isso é decisão: o relatório final é
+documento **pessoal** do monitor, que o professor assina como orientador no fim.
+Com vários monitores na mesma monitoria, "o relatório do professor" seria ambíguo,
+e resolver a ambiguidade exigiria um id de monitor na requisição — exatamente o
+que esta rota evita. Mesmo critério do `DisponibilidadesController`, que também
+nega o professor.
+
+### Como o modelo é preenchido
+
+O arquivo entregue é **o próprio modelo oficial**, versionado em
+[`src/modules/relatorios/modelo/`](src/modules/relatorios/modelo/). Um `.docx` é
+um ZIP de XMLs; a geração abre o pacote, troca **apenas** `word/document.xml` e
+fecha. Cabeçalho com logotipo, estilos, tema, fontes, margens e bordas de tabela
+voltam **byte a byte** como estavam — nenhuma linha de código descreve
+formatação, porque nada é reconstruído.
+
+A verificação confirma isso: o pacote gerado tem as **mesmas 22 entradas** do
+modelo e **só** `word/document.xml` difere.
+
+Não se usou `docxtemplater` (que exigiria marcar o modelo com `{placeholders}`)
+porque o modelo é mantido e reenviado pela coordenação: uma versão nova chegaria
+sem as marcações. Aqui a âncora é o **próprio rótulo visível** ("CURSO: "), então
+um modelo atualizado continua funcionando — e quando um rótulo mudar, a aplicação
+**se recusa a subir**, com a lista do que não casou. Isso é checado em
+`onModuleInit`, pelo mesmo motivo do `EmailService`: defeito de configuração tem
+de aparecer antes de produzir resultado errado, não meses depois num arquivo que
+ninguém conferiu.
+
+Também não se gerou o documento a partir de HTML nem de uma biblioteca de
+construção (`docx`): as duas obrigariam a reescrever o layout, e cada divergência
+seria descoberta por quem recebesse o relatório.
+
+### Campos preenchidos automaticamente
+
+| Campo do modelo | Origem |
+|---|---|
+Título (`... ACADÊMICA 2026-2`) | `monitorias.ano` e `semestre` |
+`CURSO:` | curso do **monitor** (`alunos.curso_id`) — disciplina pertence a vários cursos, só o do aluno responde sem ambiguidade |
+`DISCIPLINA:` | código e nome da disciplina da monitoria |
+`PERÍODO:` | `data_inicio` a `data_fim` da monitoria, quando ambas existem |
+`PROFESSOR-ORIENTADOR(A):` | nome do professor responsável |
+`MONITOR(A):` | nome do monitor autenticado |
+`MATRÍCULA DO ALUNO-MONITOR(A):` | `alunos.matricula` |
+`EMAIL:` | `usuarios.email` |
+Cabeçalho da tabela | carga horária acumulada + nº de atendimentos realizados |
+Tabela, uma linha por atendimento | data + dia da semana, assunto, duração, presenças confirmadas |
+`Porto Velho, ...` | data da geração, no fuso da instituição |
+Nome e RA sob a assinatura | nome e matrícula do monitor |
+`NOME DO PROFESSOR` | nome do professor responsável |
+
+### Campos mantidos em branco — e por quê
+
+| Campo | Motivo |
+|---|---|
+`TURNO:` | é da **turma** da disciplina. Turma não é entidade deste sistema |
+`DIAS / HORÁRIOS DAS AULAS:` | idem. As disponibilidades do monitor são outra coisa |
+`QUANTIDADE DE ALUNOS NA TURMA:` | idem. O nº de monitorados da monitoria é outro número, e trocar um pelo outro seria inventar |
+`TELEFONE:` | não existe em `usuarios` |
+`TITULAÇÃO DO PROFESSOR-ORIENTADOR(A):` | não existe em `professores` (`departamento` é outra informação) |
+`ATIVIDADES REALIZADAS` (texto) | relato |
+`BIBLIOGRAFIA E MATERIAL DE APOIO` | relato |
+Colunas `OBSERVAÇÕES` e `Quantidade de Alunos` das linhas em branco | relato do monitor |
+`Entrega:` e `Ciente e de acordo em __/__/__` | datas de atos que ainda não aconteceram |
+
+Os dois últimos merecem nota: o modelo trazia **`Entrega: 01/12/2026`** e
+**`01 / 12 /2025`** escritos à mão de semestres anteriores. São limpos, não
+preservados — manter data errada em documento oficial é pior que deixar o campo
+vazio.
+
+### A tabela de atividades
+
+Duas decisões visíveis no documento:
+
+1. **Toda linha preenchida do modelo é descartada.** No modelo elas são exemplo
+   ("Reforço da aula de Farmacologia da Esquizofrenia"), e um relatório oficial
+   que chega com dados de outra pessoa é pior que um vazio. O critério é
+   estrutural — linha com qualquer texto é exemplo, porque modelo preenchido não
+   existe — e não uma lista de textos a remover;
+2. **Sobram sempre 8 linhas em branco**, mesmo com muitos atendimentos. O
+   relatório tem campos que só o monitor preenche, e as atividades que não
+   viraram atendimento registrado (reunião com o orientador, preparo de
+   material). Entregar a tabela cheia até a última linha obrigaria quem assina a
+   inserir linhas no Word.
+
+A linha em branco do modelo é o molde das linhas novas, então bordas, larguras e
+alinhamento vêm do próprio documento.
+
+A carga horária acumulada entra no **cabeçalho da tabela**, não como linha de
+TOTAL: uma linha de total ficaria desatualizada no instante em que o monitor
+acrescentasse uma atividade à mão — e o relatório existe para ser completado à
+mão. No cabeçalho o número fica rotulado como o que é: *o que o sistema
+registrou*.
+
+### Download
+
+`Content-Type` de documento Word, `Content-Disposition: attachment` com nome
+gerado pelo servidor em ASCII
+(`relatorio-monitoria-BAN001-2026-2-1214.docx`), e `Cache-Control: no-store`.
+
+**O frontend precisa ler o `blob` da resposta e esse cabeçalho** — `fetch` +
+`JSON.parse` produziria um arquivo corrompido, porque o corpo é binário.
+
+### Dependência adicionada
+
+**`jszip` 3.10.2** (MIT), única. Um `.docx` é um ZIP e o Node não traz leitor de
+ZIP. Escolhida por ser a biblioteca mais estabelecida do ecossistema, trazer os
+próprios tipos (sem `@types/*` extra) e não ter dependência nativa — importa para
+um projeto que roda em Windows e em container Linux sem passo de compilação.
+`npm audit` não a implica em nenhum aviso.
+
+`nest-cli.json` ganhou `assets` para o `.docx` ser copiado para o `dist/`. Sem
+essa entrada, `nest build` levaria apenas os `.js` e a geração falharia **somente
+em produção**, no primeiro download.
+
+---
+
 ## Gestão de usuários (sem perfil ADMIN)
 
 O domínio não prevê um ator acima do professor, então **são os professores que
@@ -1780,7 +1976,8 @@ cursos, disciplinas, monitorias, participantes, disponibilidades, atendimentos,
 cancelamentos, histórico de status, avaliações, materiais, gamificação
 (pontuação e ranking), analytics, trilha de requisições, recuperação de senha,
 notificações por e-mail e **editais de seleção de monitores** — com inscrição
-pública, boletim em PDF e aprovação que cria a monitoria e habilita o monitor.
+pública, boletim em PDF e aprovação que cria a monitoria e habilita o monitor —,
+carga horária acumulada dos monitores e geração do relatório final em `.docx`.
 
 **Deliberadamente fora desta versão:**
 
@@ -1805,4 +2002,5 @@ pública, boletim em PDF e aprovação que cria a monitoria e habilita o monitor
 | `npm run criar-professor` | cria o primeiro professor fora da API (bootstrap) |
 | `npm run enviar-lembretes` | dispara as rotinas de notificação agora, sem esperar o agendador |
 | `npm run ver-emails` | imprime todos os textos de e-mail já renderizados, com as variações de singular/plural — para revisar redação sem enviar nada |
+| `npm run ver-relatorio` | confere a carga horária contra uma soma independente em SQL e gera um `.docx` a partir dos dados reais, só leitura |
 | `npm run lint` · `format` | ESLint (com fix) e Prettier |
