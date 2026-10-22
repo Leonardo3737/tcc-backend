@@ -22,10 +22,17 @@ import { PerfilUsuario } from '../../common/enums/perfil-usuario.enum';
 import { UsuarioAutenticado } from '../../common/types/usuario-autenticado';
 import { AprovacaoDeInscricaoService } from './aprovacao-de-inscricao.service';
 import { AprovacaoRespostaDto } from './dto/aprovacao-resposta.dto';
-import { FiltroInscricoesDto, FiltroResumoInscricoesDto } from './dto/filtro-inscricoes.dto';
+import {
+  FiltroExportacaoInscricoesDto,
+  FiltroInscricoesDto,
+  FiltroResumoInscricoesDto,
+} from './dto/filtro-inscricoes.dto';
 import { InscricaoRespostaDto } from './dto/inscricao-resposta.dto';
 import { ResumoPorDisciplinaDto } from './dto/resumo-por-disciplina.dto';
 import { cabecalhoDeAnexo, InscricoesEditalService } from './inscricoes-edital.service';
+
+/** O tipo MIME de .xlsx. Longo demais para repetir em quatro lugares. */
+const TIPO_XLSX = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
 
 /**
  * Operacoes administrativas sobre as candidaturas. Tudo restrito a PROFESSOR.
@@ -105,6 +112,53 @@ export class InscricoesController {
     return this.inscricoesService.resumoPorDisciplina(filtro);
   }
 
+  /**
+   * Declarada ANTES de `GET /:id`, como `resumo` — depois dele, "exportar"
+   * seria lido como identificador e o ParseUUIDPipe devolveria 400.
+   */
+  @Get('exportar')
+  @Perfis(PerfilUsuario.PROFESSOR)
+  @Header('Cache-Control', 'no-store')
+  @ApiProduces(TIPO_XLSX)
+  @ApiOperation({
+    summary: 'Exporta as inscricoes do edital em planilha .xlsx. Somente PROFESSOR.',
+    description:
+      'Colunas: e-mail, nome e matricula do aluno, curso, disciplina, nome do professor, ' +
+      'turno, N1, N2 e media. Notas e media saem como NUMERO, nao texto, e nota ausente vira ' +
+      'celula VAZIA — nunca zero, que falsearia qualquer media calculada na planilha. ' +
+      '`editalId` e obrigatorio: planilha que mistura editais poe candidatos de processos ' +
+      'diferentes na mesma coluna de media. ' +
+      'Aceita os mesmos filtros da listagem (curso, disciplina, turno, professor, busca, ano, ' +
+      'semestre) e a mesma ordenacao, com notas ausentes sempre no fim. ' +
+      'NAO e paginada: devolve todas as linhas do recorte. Acima do teto a exportacao e ' +
+      'RECUSADA com 409, em vez de entregar um arquivo truncado que parece completo.',
+  })
+  @ApiOkResponse({
+    description: 'A planilha com as inscricoes do recorte.',
+    content: { [TIPO_XLSX]: { schema: { type: 'string', format: 'binary' } } },
+  })
+  @ApiConflictResponse({
+    description: 'O recorte excede o teto de linhas da exportacao.',
+    type: RespostaErro,
+  })
+  async exportar(
+    @Query() filtro: FiltroExportacaoInscricoesDto,
+    @Res() resposta: Response,
+  ): Promise<void> {
+    const { conteudo, nomeDoArquivo, total } = await this.inscricoesService.exportar(filtro);
+
+    resposta.setHeader('Content-Type', TIPO_XLSX);
+    resposta.setHeader('Content-Length', conteudo.length);
+    resposta.setHeader('Content-Disposition', `attachment; filename="${nomeDoArquivo}"`);
+    /**
+     * Cabecalho proprio com a contagem: o corpo e binario, entao a unica forma
+     * de o cliente saber quantas linhas vieram sem abrir o arquivo. Util para a
+     * tela confirmar "245 inscricoes exportadas" depois do download.
+     */
+    resposta.setHeader('X-Total-Inscricoes', String(total));
+
+    resposta.end(conteudo);
+  }
   @Get(':id')
   @Perfis(PerfilUsuario.PROFESSOR)
   @ApiOperation({

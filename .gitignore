@@ -59,6 +59,7 @@ temp/
 
 # Relatorios gerados pelo script de verificacao (o modelo em src/ e versionado)
 /relatorio-*.docx
+/inscricoes-*.xlsx
 
 # Misc
 *.tgz
