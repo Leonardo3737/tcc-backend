@@ -24,11 +24,13 @@ import { Usuario } from '../usuarios/entities/usuario.model';
 import { CriarInscricaoDto } from './dto/criar-inscricao.dto';
 import {
   CampoOrdenacaoInscricao,
+  FiltroExportacaoInscricoesDto,
   FiltroInscricoesDto,
   FiltroResumoInscricoesDto,
 } from './dto/filtro-inscricoes.dto';
 import { InscricaoConfirmacaoDto, InscricaoRespostaDto } from './dto/inscricao-resposta.dto';
 import { ResumoPorDisciplinaDto } from './dto/resumo-por-disciplina.dto';
+import { montarPlanilhaDeInscricoes } from './planilha-de-inscricoes';
 import { EditaisService } from './editais.service';
 import { Boletim } from './entities/boletim.model';
 import { Edital } from './entities/edital.model';
@@ -48,6 +50,21 @@ import { montarConfirmacao } from './mensagem-de-confirmacao';
  * inteira em alta resolucao.
  */
 export const LIMITE_BOLETIM_BYTES = 5 * 1024 * 1024;
+
+/**
+ * Teto de linhas da exportacao em planilha.
+ *
+ * Generoso para o caso real — um processo seletivo recebe dezenas a centenas de
+ * candidaturas —, e existe para a resposta ter tamanho conhecido. Estourar o
+ * teto recusa a exportacao; ver `exportar`.
+ */
+export const LIMITE_DE_EXPORTACAO = 5000;
+
+export interface PlanilhaGerada {
+  conteudo: Buffer;
+  nomeDoArquivo: string;
+  total: number;
+}
 
 /** `%PDF-`. Ver `validarBoletim`. */
 const ASSINATURA_PDF = Buffer.from([0x25, 0x50, 0x44, 0x46, 0x2d]);
@@ -647,6 +664,114 @@ export class InscricoesEditalService {
       onde: condicoes.length > 0 ? `WHERE ${condicoes.join(' AND ')}` : '',
       valores,
     };
+  }
+
+  /**
+   * EXPORTACAO das inscricoes do edital em planilha .xlsx.
+   *
+   * Reusa `condicoesDoResumo` para montar o WHERE, e nao e economia de linhas:
+   * e a garantia de que a planilha contem EXATAMENTE as inscricoes que a
+   * listagem mostra com os mesmos filtros. Um WHERE proprio aqui divergiria no
+   * primeiro filtro novo, e a divergencia apareceria como linha faltando numa
+   * planilha que a banca ja levou para a reuniao.
+   *
+   * Gerada sob demanda, nada e armazenado — mesma razao do relatorio em .docx:
+   * a planilha e uma fotografia do momento do download, e guardar copia criaria
+   * a pergunta "esta desatualizada?" a cada inscricao nova.
+   *
+   * ---------------------------------------------------------------------------
+   * SEM PAGINACAO, COM TETO QUE RECUSA
+   *
+   * Exportar devolve todas as linhas do recorte: planilha com 20 de 300
+   * candidatos e pior que planilha nenhuma, porque abre, parece completa e nao
+   * esta. Mas "todas" sem limite e uma resposta sem tamanho conhecido, entao ha
+   * um teto — e estourar o teto RECUSA em vez de truncar. Truncar em silencio
+   * produziria exatamente o arquivo incompleto que parece valido.
+   *
+   * O teto e conferido pedindo UMA linha a mais que o limite: se ela vier, o
+   * recorte e maior que o permitido. Evita um COUNT separado, que poderia
+   * divergir da consulta seguinte sob escrita concorrente.
+   */
+  async exportar(filtro: FiltroExportacaoInscricoesDto): Promise<PlanilhaGerada> {
+    const { onde, valores } = this.condicoesDoResumo(filtro);
+    const ordem = this.ordenacaoEmSql(filtro);
+
+    const linhas = (await this.sequelize.query(
+      `
+      SELECT
+        i.email,
+        i.nome_completo,
+        i.matricula,
+        c.nome  AS curso,
+        d.nome  AS disciplina,
+        up.nome AS professor,
+        i.turno,
+        i.n1,
+        i.n2,
+        i.media
+      FROM inscricoes_edital i
+      JOIN cursos c       ON c.id = i.curso_id
+      JOIN disciplinas d  ON d.id = i.disciplina_id
+      JOIN professores pr ON pr.usuario_id = i.professor_id
+      JOIN usuarios up    ON up.id = pr.usuario_id
+      JOIN editais e      ON e.id = i.edital_id
+      ${onde}
+      ORDER BY ${ordem}
+      LIMIT ${LIMITE_DE_EXPORTACAO + 1};
+      `,
+      { replacements: valores, type: QueryTypes.SELECT },
+    )) as unknown as Record<string, string | null>[];
+
+    if (linhas.length > LIMITE_DE_EXPORTACAO) {
+      throw new ConflictException(
+        `O recorte tem mais de ${LIMITE_DE_EXPORTACAO} inscricoes e a planilha nao foi ` +
+          'gerada — um arquivo truncado pareceria completo. Restrinja por disciplina, ' +
+          'curso ou turno e exporte em partes.',
+      );
+    }
+
+    const edital = await this.editaisService.buscarOuFalhar(filtro.editalId);
+
+    return {
+      conteudo: await montarPlanilhaDeInscricoes(
+        linhas.map((linha) => ({
+          email: linha.email ?? '',
+          nomeCompleto: linha.nome_completo ?? '',
+          matricula: linha.matricula ?? '',
+          curso: linha.curso ?? '',
+          disciplina: linha.disciplina ?? '',
+          professor: linha.professor ?? '',
+          turno: linha.turno ?? '',
+          /**
+           * `numeric` chega do driver como STRING. A conversao e aqui, e nulo
+           * CONTINUA nulo: na planilha isso vira celula vazia, nunca zero.
+           */
+          n1: linha.n1 === null ? null : Number(linha.n1),
+          n2: linha.n2 === null ? null : Number(linha.n2),
+          media: linha.media === null ? null : Number(linha.media),
+        })),
+      ),
+      nomeDoArquivo: `inscricoes-edital-${edital.ano}-${edital.semestre}.xlsx`,
+      total: linhas.length,
+    };
+  }
+
+  /**
+   * ORDER BY em texto, para a consulta de exportacao.
+   *
+   * A listagem usa o `order` do Sequelize; aqui a consulta e SQL cru (por causa
+   * do reuso de `condicoesDoResumo`), entao a ordem precisa ir em texto. A
+   * coluna continua vindo do MESMO mapa fechado `COLUNA_DE_ORDENACAO`, e a
+   * direcao do enum ja validado — nenhum pedaco disto vem da requisicao.
+   *
+   * `NULLS LAST` pela mesma razao de sempre: nota ausente nao e nota baixa, e em
+   * planilha ela ficaria no topo de uma ordenacao decrescente.
+   */
+  private ordenacaoEmSql(filtro: FiltroExportacaoInscricoesDto): string {
+    const coluna = COLUNA_DE_ORDENACAO[filtro.ordenarPor] ?? COLUNA_DE_ORDENACAO.media;
+    const direcao = filtro.direcao === DirecaoOrdenacao.ASC ? 'ASC' : 'DESC';
+
+    return `i.${coluna} ${direcao} NULLS LAST, i.id ASC`;
   }
 
   async detalhar(id: string): Promise<InscricaoRespostaDto> {

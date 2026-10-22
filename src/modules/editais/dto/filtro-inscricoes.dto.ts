@@ -1,4 +1,4 @@
-import { ApiPropertyOptional, OmitType } from '@nestjs/swagger';
+import { ApiProperty, ApiPropertyOptional, OmitType } from '@nestjs/swagger';
 import { Transform, Type } from 'class-transformer';
 import { IsEnum, IsInt, IsOptional, IsString, IsUUID, Max, MaxLength, Min } from 'class-validator';
 
@@ -146,3 +146,35 @@ export class FiltroResumoInscricoesDto extends OmitType(FiltroInscricoesDto, [
   'ordenarPor',
   'direcao',
 ] as const) {}
+
+/**
+ * Filtros da EXPORTACAO em planilha, tambem derivados da listagem.
+ *
+ * Sai a paginacao: exportar devolve TODAS as linhas do recorte, e uma planilha
+ * com 20 de 300 candidatos seria pior que nenhuma — ela abre, parece completa e
+ * nao esta. O teto existe no service, e estourar o teto RECUSA em vez de
+ * truncar.
+ *
+ * Ficam `ordenarPor` e `direcao`, ao contrario do resumo: aqui a ordem importa
+ * de verdade, porque a planilha e lida na ordem em que vem — e ordenar depois
+ * no Excel, numa tabela que mistura notas ausentes, e justamente onde o
+ * `NULLS LAST` do servidor se perde.
+ *
+ * `editalId` passa a ser OBRIGATORIO, e e a unica divergencia em relacao a
+ * listagem. Uma planilha que mistura editais poe candidatos de processos
+ * seletivos diferentes na mesma coluna "Media", e comparar essas medias nao
+ * significa nada — o recorte deixaria de ser util justamente na coluna pela
+ * qual a banca decide.
+ */
+export class FiltroExportacaoInscricoesDto extends OmitType(FiltroInscricoesDto, [
+  'pagina',
+  'limite',
+  'editalId',
+] as const) {
+  @ApiProperty({
+    format: 'uuid',
+    description: 'Obrigatorio: a planilha e de UM edital. Ver a nota no DTO.',
+  })
+  @IsUUID('4', { message: 'editalId deve ser um UUID valido' })
+  editalId: string;
+}

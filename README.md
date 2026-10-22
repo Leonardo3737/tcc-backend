@@ -222,7 +222,7 @@ sem `Bearer`). O `persistAuthorization` mantém o token entre recarregamentos.
 npm run test
 ```
 
-493 testes de unidade, sem banco, cobrindo o que o PostgreSQL **não** alcança:
+514 testes de unidade, sem banco, cobrindo o que o PostgreSQL **não** alcança:
 autorização, papéis, transições de estado, propriedade de recurso, campos
 derivados e tradução de erro.
 
@@ -243,6 +243,7 @@ derivados e tradução de erro.
 | `disciplinas.spec.ts` | geração do código (prefixo, acentos, numeração, largura) e nova tentativa quando a constraint recusa |
 | `email.spec.ts` | modo log sem credencial, payload e cabeçalhos do Brevo, timeout, recusa do provedor e falha de rede sem lançar; corpo nunca no log |
 | `recuperacao-senha.spec.ts` | anti-enumeração (resposta e custo idênticos), teto de tentativas, expiração, uso único, código e senha só como hash |
+| `exportacao-inscricoes.spec.ts` | planilha lida de volta do `.xlsx` gerado: ordem das colunas, nota como número e não texto, nota ausente como célula vazia, filtros idênticos aos da listagem por `replacements`, `NULLS LAST`, e recusa em vez de truncar acima do teto |
 | `relatorio-monitoria.spec.ts` | carga horária (minutos como unidade canônica, formatação), preenchimento sobre o modelo REAL do disco, remoção das linhas de exemplo, linhas em branco que sobram, escape de XML, pacote que só altera `document.xml` |
 | `aprovacao-de-inscricao.spec.ts` | a inscrição como única entrada; conta reaproveitada e nunca alterada; responsável é quem aprova, não quem o candidato indicou; período vindo do edital; reuso da monitoria da oferta; ordem dos passos que torna a operação repetível |
 | `professores.spec.ts` | busca na listagem de professores, e a assimetria entre as duas rotas: a pública varre menos campos, e nunca o e-mail |
@@ -1068,6 +1069,7 @@ e devolve zero na rota anônima.
 | `POST` | `/api/editais/:editalId/inscricoes` | **público** (**20 req/min**) — `multipart/form-data` |
 | `GET` | `/api/inscricoes` | **PROFESSOR** — filtros e ordenações abaixo |
 | `GET` | `/api/inscricoes/resumo` | **PROFESSOR** — totais por disciplina (cabeçalho de acordeão) |
+| `GET` | `/api/inscricoes/exportar` | **PROFESSOR** — planilha `.xlsx` das inscrições do edital |
 | `GET` | `/api/inscricoes/:id` | **PROFESSOR** |
 | `GET` | `/api/inscricoes/:id/boletim` | **PROFESSOR** — devolve o PDF como anexo |
 | `POST` | `/api/inscricoes/:id/aprovar` | **PROFESSOR** — cria a monitoria e habilita o monitor |
@@ -1483,6 +1485,74 @@ A busca é uma **consulta separada**, não um join na agregada: juntar `monitori
 e `monitoria_participantes` na consulta agrupada multiplicaria as linhas de
 inscrição por monitor e inflaria `totalInscricoes` — erro silencioso, que nada
 faria falhar.
+
+### Exportação em planilha (.xlsx)
+
+```
+GET /api/inscricoes/exportar?editalId=...     (PROFESSOR)
+```
+
+Dez colunas, na ordem: **e-mail do aluno, nome do aluno, matrícula do aluno,
+curso, disciplina, nome do professor, turno, nota N1, nota N2, média**. Aba
+"Inscrições", cabeçalho em negrito e **fixo** (a banca rola centenas de linhas) e
+larguras ajustadas por coluna.
+
+Gerada sob demanda, nada armazenado — mesma razão do relatório em `.docx`.
+
+#### Notas são número, e nota ausente é célula vazia
+
+As duas pontas do mesmo cuidado:
+
+- N1, N2 e média saem como **número**, não texto. Número gravado como string
+  alinha à esquerda e é ignorado por `MÉDIA()`, `MAIOR()` e pela ordenação — a
+  planilha abriria perfeita e não serviria para o que a banca precisa dela;
+- nota ausente vira **célula vazia**, nunca zero. Zero numa coluna de nota é uma
+  afirmação ("tirou zero"), e `MÉDIA()` sobre uma coluna com zeros devolve um
+  número menor e plausível que ninguém confere. É a mesma regra que vale no
+  banco (`media` nula), na API e no relatório.
+
+#### `editalId` é obrigatório
+
+É a única divergência em relação à listagem, que o aceita como filtro opcional.
+Uma planilha que mistura editais põe candidatos de processos seletivos diferentes
+na mesma coluna "Média", e comparar essas médias não significa nada — o recorte
+deixaria de ser útil justamente na coluna pela qual a banca decide.
+
+Os demais filtros são **os mesmos da listagem** (curso, disciplina, turno,
+professor, busca, ano, semestre) e a ordenação também, com `NULLS LAST` nas duas
+direções. O `WHERE` é construído pelo **mesmo método** que o resumo usa
+(`condicoesDoResumo`), e isso não é economia de linhas: é a garantia de que a
+planilha contém exatamente as inscrições que a listagem mostra. Um `WHERE`
+próprio divergiria no primeiro filtro novo, e a divergência apareceria como linha
+faltando numa planilha que a banca já levou para a reunião.
+
+#### Sem paginação, com teto que recusa
+
+Exportar devolve **todas** as linhas do recorte: planilha com 20 de 300
+candidatos é pior que planilha nenhuma, porque abre, parece completa e não está.
+Mas "todas" sem limite é uma resposta sem tamanho conhecido, então há um teto de
+**5000 linhas** — e estourá-lo **recusa com 409**, em vez de truncar. O teto é
+conferido pedindo uma linha a mais que o limite, o que evita um `COUNT` separado
+que poderia divergir da consulta seguinte sob escrita concorrente.
+
+A resposta traz `X-Total-Inscricoes` com a contagem: o corpo é binário, e esse é
+o único jeito de o cliente confirmar "245 inscrições exportadas" sem abrir o
+arquivo.
+
+#### Dependência
+
+**`write-excel-file` 4.1.1** (MIT), com **uma** dependência transitiva (`fflate`,
+compressão). Preferida ao `exceljs`, que é igualmente MIT mas traz dez — entre
+elas `archiver`, `unzipper`, `tmp` e `fast-csv` — para um projeto que precisa de
+uma planilha de uma aba, sem leitura, sem CSV e sem arquivo temporário. Nenhuma
+das duas aparece em aviso do `npm audit`.
+
+Não foi escrita à mão com o `jszip` que o projeto já usa, embora `.xlsx` também
+seja um pacote OOXML. O caso do `.docx` é diferente e vale a comparação: lá se
+**edita** um arquivo válido existente; aqui seria **criar** o formato do zero
+(`sharedStrings`, `styles`, tipos de célula, referências), e o erro típico —
+número gravado como texto — não quebra o arquivo, só faz a coluna "Média" parar
+de somar na planilha de quem recebe.
 
 #### Limite conhecido: disciplina sem candidato não aparece
 
@@ -2003,4 +2073,5 @@ carga horária acumulada dos monitores e geração do relatório final em `.docx
 | `npm run enviar-lembretes` | dispara as rotinas de notificação agora, sem esperar o agendador |
 | `npm run ver-emails` | imprime todos os textos de e-mail já renderizados, com as variações de singular/plural — para revisar redação sem enviar nada |
 | `npm run ver-relatorio` | confere a carga horária contra uma soma independente em SQL e gera um `.docx` a partir dos dados reais, só leitura |
+| `npm run ver-exportacao` | gera a planilha de cada edital, lê o `.xlsx` de volta e compara célula a célula com uma consulta independente, só leitura |
 | `npm run lint` · `format` | ESLint (com fix) e Prettier |
