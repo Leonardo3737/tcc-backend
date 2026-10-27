@@ -3,6 +3,7 @@ import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
 
 import { UsuarioRespostaDto } from '../usuarios/dto/usuario-resposta.dto';
+import { Usuario } from '../usuarios/entities/usuario.model';
 import { HashService } from '../usuarios/hash.service';
 import { UsuariosService } from '../usuarios/usuarios.service';
 import { LoginDto } from './dto/login.dto';
@@ -23,32 +24,10 @@ export class AuthService {
     private readonly hashService: HashService,
     private readonly jwtService: JwtService,
     private readonly config: ConfigService,
-  ) {}
+  ) { }
 
   async login(dto: LoginDto): Promise<RespostaLoginDto> {
-    const usuario = await this.usuariosService.buscarPorEmailComSenha(dto.email);
-
-    /**
-     * A senha e conferida mesmo quando o usuario nao existe, com um hash
-     * descartavel, para que o tempo de resposta nao denuncie quais e-mails estao
-     * cadastrados (enumeracao de usuarios por timing). A mensagem devolvida
-     * tambem e identica nos dois casos.
-     */
-    if (!usuario) {
-      await this.hashService.gastarTempoDeVerificacao(dto.senha);
-      throw new UnauthorizedException('Credenciais invalidas.');
-    }
-
-    const senhaConfere = await this.hashService.conferir(usuario.senhaHash, dto.senha);
-
-    if (!senhaConfere) {
-      throw new UnauthorizedException('Credenciais invalidas.');
-    }
-
-    if (!usuario.ativo) {
-      throw new ForbiddenException('Usuario desativado. Procure a coordenacao.');
-    }
-
+    const usuario = await this.validarCredenciais(dto.email, dto.senha);
     const dadosUsuario = UsuarioRespostaDto.deModelo(usuario);
 
     const payload: PayloadJwt = {
@@ -78,5 +57,47 @@ export class AuthService {
       expiraEmIso: new Date(exp * 1000).toISOString(),
       usuario: dadosUsuario,
     };
+  }
+
+  /**
+ * Confere email e senha. Extraido do login para ser usado tambem pela tela
+ * de autorizacao OAuth, com as mesmas protecoes (timing e usuario desativado).
+ */
+  async validarCredenciais(email: string, senha: string): Promise<Usuario> {
+    const usuario = await this.usuariosService.buscarPorEmailComSenha(email);
+
+    if (!usuario) {
+      await this.hashService.gastarTempoDeVerificacao(senha);
+      throw new UnauthorizedException('Credenciais invalidas.');
+    }
+    if (!(await this.hashService.conferir(usuario.senhaHash, senha))) {
+      throw new UnauthorizedException('Credenciais invalidas.');
+    }
+    if (!usuario.ativo) {
+      throw new ForbiddenException('Usuario desativado. Procure a coordenacao.');
+    }
+    return usuario;
+  }
+
+  /**
+   * Emite o JWT de acesso a partir do id. Usado pelo OAuth na troca do codigo
+   * e no refresh: recarrega o usuario do banco, entao um usuario desativado
+   * nao consegue renovar.
+   */
+  async emitirTokenDeAcesso(usuarioId: string): Promise<{ token: string; expiraEmSegundos: number }> {
+    const usuario = await this.usuariosService.buscarPorIdComPerfis(usuarioId);
+    if (!usuario || !usuario.ativo) {
+      throw new UnauthorizedException('Usuario inexistente ou desativado.');
+    }
+
+    const payload: PayloadJwt = {
+      sub: usuario.id,
+      email: usuario.email,
+      perfis: UsuarioRespostaDto.derivarPerfis(usuario.aluno, usuario.professor),
+    };
+    const token = await this.jwtService.signAsync(payload);
+    const { exp } = this.jwtService.decode<{ exp: number }>(token);
+
+    return { token, expiraEmSegundos: Math.max(0, exp - Math.floor(Date.now() / 1000)) };
   }
 }

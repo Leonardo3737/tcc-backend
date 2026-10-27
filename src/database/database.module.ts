@@ -2,27 +2,30 @@ import { Module } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { SequelizeModule } from '@nestjs/sequelize';
 
-import { Atendimento } from '../modules/atendimentos/entities/atendimento.model';
+import { OAuthCliente } from 'src/modules/oauth/entities/oauth-cliente.model';
+import { OAuthCodigo } from 'src/modules/oauth/entities/oauth-codigo.model';
+import { OAuthRefreshToken } from 'src/modules/oauth/entities/oauth-refresh-token.model';
 import { AtendimentoParticipante } from '../modules/atendimentos/entities/atendimento-participante.model';
 import { AtendimentoStatusHistorico } from '../modules/atendimentos/entities/atendimento-status-historico.model';
-import { Avaliacao } from '../modules/avaliacoes/entities/avaliacao.model';
-import { Disciplina } from '../modules/disciplinas/entities/disciplina.model';
-import { DisciplinaCurso } from '../modules/disciplinas/entities/disciplina-curso.model';
-import { PontuacaoEvento } from '../modules/gamificacao/entities/pontuacao-evento.model';
+import { Atendimento } from '../modules/atendimentos/entities/atendimento.model';
 import { RecuperacaoSenha } from '../modules/auth/entities/recuperacao-senha.model';
-import { Notificacao } from '../modules/notificacoes/entities/notificacao.model';
-import { LogRequisicao } from '../modules/logs/entities/log-requisicao.model';
-import { Material } from '../modules/materiais/entities/material.model';
-import { Disponibilidade } from '../modules/disponibilidades/entities/disponibilidade.model';
-import { Monitoria } from '../modules/monitorias/entities/monitoria.model';
-import { MonitoriaParticipante } from '../modules/monitorias/entities/monitoria-participante.model';
-import { Aluno } from '../modules/usuarios/entities/aluno.model';
-import { Professor } from '../modules/usuarios/entities/professor.model';
-import { Usuario } from '../modules/usuarios/entities/usuario.model';
+import { Avaliacao } from '../modules/avaliacoes/entities/avaliacao.model';
 import { Curso } from '../modules/cursos/entities/curso.model';
+import { DisciplinaCurso } from '../modules/disciplinas/entities/disciplina-curso.model';
+import { Disciplina } from '../modules/disciplinas/entities/disciplina.model';
+import { Disponibilidade } from '../modules/disponibilidades/entities/disponibilidade.model';
 import { Boletim } from '../modules/editais/entities/boletim.model';
 import { Edital } from '../modules/editais/entities/edital.model';
 import { InscricaoEdital } from '../modules/editais/entities/inscricao-edital.model';
+import { PontuacaoEvento } from '../modules/gamificacao/entities/pontuacao-evento.model';
+import { LogRequisicao } from '../modules/logs/entities/log-requisicao.model';
+import { Material } from '../modules/materiais/entities/material.model';
+import { MonitoriaParticipante } from '../modules/monitorias/entities/monitoria-participante.model';
+import { Monitoria } from '../modules/monitorias/entities/monitoria.model';
+import { Notificacao } from '../modules/notificacoes/entities/notificacao.model';
+import { Aluno } from '../modules/usuarios/entities/aluno.model';
+import { Professor } from '../modules/usuarios/entities/professor.model';
+import { Usuario } from '../modules/usuarios/entities/usuario.model';
 
 @Module({
   imports: [
@@ -60,6 +63,9 @@ import { InscricaoEdital } from '../modules/editais/entities/inscricao-edital.mo
           Edital,
           InscricaoEdital,
           Boletim,
+          OAuthCliente,
+          OAuthCodigo,
+          OAuthRefreshToken
         ],
 
         /**

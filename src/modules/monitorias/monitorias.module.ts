@@ -1,15 +1,16 @@
 import { Module } from '@nestjs/common';
 import { SequelizeModule } from '@nestjs/sequelize';
 
-import { Atendimento } from '../atendimentos/entities/atendimento.model';
 import { AtendimentoParticipante } from '../atendimentos/entities/atendimento-participante.model';
+import { Atendimento } from '../atendimentos/entities/atendimento.model';
 import { DisciplinasModule } from '../disciplinas/disciplinas.module';
 import { DisciplinaCurso } from '../disciplinas/entities/disciplina-curso.model';
 import { Aluno } from '../usuarios/entities/aluno.model';
-import { Monitoria } from './entities/monitoria.model';
 import { MonitoriaParticipante } from './entities/monitoria-participante.model';
+import { Monitoria } from './entities/monitoria.model';
 import { ParticipacaoGuard } from './guards/participacao.guard';
 import { MonitoriasController } from './monitorias.controller';
+import { MonitoriasMcpController } from './monitorias.mcp-controller';
 import { MonitoriasService } from './monitorias.service';
 import { ParticipacaoService } from './participacao.service';
 import { ParticipantesController } from './participantes.controller';
@@ -42,7 +43,7 @@ import { ParticipantesService } from './participantes.service';
     ]),
     DisciplinasModule,
   ],
-  controllers: [MonitoriasController, ParticipantesController],
+  controllers: [MonitoriasController, ParticipantesController, MonitoriasMcpController],
   providers: [MonitoriasService, ParticipacaoService, ParticipantesService, ParticipacaoGuard],
   exports: [MonitoriasService, ParticipacaoService, ParticipantesService, ParticipacaoGuard],
 })

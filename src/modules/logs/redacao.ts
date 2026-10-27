@@ -44,6 +44,10 @@ const CAMPOS_SENSIVEIS = new Set([
   'brevo_api_key',
   'secret',
   'jwt_secret',
+  'code',
+  'code_verifier',
+  'refresh_token',
+  'access_token',
 ]);
 
 /** Teto por campo de texto: evita que um corpo grande inche a tabela. */

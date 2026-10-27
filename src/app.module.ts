@@ -9,21 +9,23 @@ import { TodasExcecoesFilter } from './common/filters/todas-excecoes.filter';
 import { configuration } from './config/configuration';
 import { envValidationSchema } from './config/env.validation';
 import { DatabaseModule } from './database/database.module';
+import { McpModule } from './mcp/mcp.module';
 import { AnalyticsModule } from './modules/analytics/analytics.module';
 import { AtendimentosModule } from './modules/atendimentos/atendimentos.module';
-import { AvaliacoesModule } from './modules/avaliacoes/avaliacoes.module';
 import { AuthModule } from './modules/auth/auth.module';
+import { AvaliacoesModule } from './modules/avaliacoes/avaliacoes.module';
 import { ConfiguracaoModule } from './modules/configuracao/configuracao.module';
 import { CursosModule } from './modules/cursos/cursos.module';
 import { DisciplinasModule } from './modules/disciplinas/disciplinas.module';
-import { EditaisModule } from './modules/editais/editais.module';
 import { DisponibilidadesModule } from './modules/disponibilidades/disponibilidades.module';
+import { EditaisModule } from './modules/editais/editais.module';
 import { EmailModule } from './modules/email/email.module';
 import { GamificacaoModule } from './modules/gamificacao/gamificacao.module';
 import { LogsModule } from './modules/logs/logs.module';
 import { MateriaisModule } from './modules/materiais/materiais.module';
 import { MonitoriasModule } from './modules/monitorias/monitorias.module';
 import { NotificacoesModule } from './modules/notificacoes/notificacoes.module';
+import { OAuthModule } from './modules/oauth/oauth.module';
 import { RelatoriosModule } from './modules/relatorios/relatorios.module';
 import { UsuariosModule } from './modules/usuarios/usuarios.module';
 
@@ -90,6 +92,8 @@ import { UsuariosModule } from './modules/usuarios/usuarios.module';
     NotificacoesModule,
     EditaisModule,
     RelatoriosModule,
+    McpModule,
+    OAuthModule
   ],
   providers: [
     // Registrado aqui para valer sobre TODA a aplicacao, inclusive erros

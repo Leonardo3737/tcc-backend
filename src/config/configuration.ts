@@ -20,6 +20,11 @@ export const configuration = () => ({
       .split(',')
       .map((origem) => origem.trim())
       .filter(Boolean),
+    /**
+    * Endereco PUBLICO desta API. O OAuth monta com ele as URLs que o Claude
+    * acessa de fora da sua maquina (em dev com tunel, a URL do tunel).
+    */
+    urlPublica: (process.env.URL_PUBLICA ?? `http://localhost:${process.env.PORT ?? 3000}`).replace(/\/+$/, ''),
   },
   database: {
     host: process.env.DB_HOST as string,

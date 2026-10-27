@@ -18,6 +18,7 @@ export const envValidationSchema = Joi.object({
    * malformado quebre no boot, e nao na caixa de entrada de alguem.
    */
   URL_FRONT: Joi.string().uri().default('http://localhost:3001'),
+  URL_PUBLICA: Joi.string().uri({ scheme: ['http', 'https'] }).optional(),
 
   DB_HOST: Joi.string().required(),
   DB_PORT: Joi.number().port().default(5432),
