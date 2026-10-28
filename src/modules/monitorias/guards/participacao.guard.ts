@@ -1,10 +1,4 @@
-import {
-  BadRequestException,
-  CanActivate,
-  ExecutionContext,
-  ForbiddenException,
-  Injectable,
-} from '@nestjs/common';
+import { BadRequestException, CanActivate, ExecutionContext, Injectable } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
 
 import {
@@ -52,33 +46,14 @@ export class ParticipacaoGuard implements CanActivate {
       throw new BadRequestException('Rota mal configurada: parametro monitoriaId ausente.');
     }
 
-    const ctx = await this.participacaoService.obterContexto(monitoriaId, usuario);
-    const regraProfessor = requisito.professorResponsavel ?? 'PERMITIDO';
+    // A decisao em si mora no ParticipacaoService, porque as ferramentas MCP
+    // precisam da MESMA avaliacao sem ter uma rota HTTP para guardar.
+    requisicao.contextoParticipacao = await this.participacaoService.exigirRequisito(
+      monitoriaId,
+      usuario,
+      requisito,
+    );
 
-    if (regraProfessor === 'EXIGIDO' && !ctx.ehProfessorResponsavel) {
-      throw new ForbiddenException(
-        'Apenas o professor responsavel pode administrar esta monitoria.',
-      );
-    }
-
-    const professorAutorizado = regraProfessor === 'PERMITIDO' || regraProfessor === 'EXIGIDO';
-
-    if (ctx.ehProfessorResponsavel && professorAutorizado) {
-      requisicao.contextoParticipacao = ctx;
-      return true;
-    }
-
-    if (!ctx.participacao) {
-      throw new ForbiddenException('Voce nao participa desta monitoria.');
-    }
-
-    if (requisito.papeis?.length && !requisito.papeis.includes(ctx.papel!)) {
-      throw new ForbiddenException(
-        `Esta operacao exige o papel: ${requisito.papeis.join(' ou ')}.`,
-      );
-    }
-
-    requisicao.contextoParticipacao = ctx;
     return true;
   }
 }

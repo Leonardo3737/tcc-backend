@@ -4,6 +4,7 @@ import { AnalyticsModule } from '../analytics/analytics.module';
 import { MonitoriasModule } from '../monitorias/monitorias.module';
 import { RelatorioMonitoriaService } from './relatorio-monitoria.service';
 import { RelatoriosController } from './relatorios.controller';
+import { RelatoriosMcpController } from './relatorios.mcp-controller';
 
 /**
  * Geracao do relatorio final de monitoria em .docx.
@@ -25,7 +26,7 @@ import { RelatoriosController } from './relatorios.controller';
  */
 @Module({
   imports: [MonitoriasModule, AnalyticsModule],
-  controllers: [RelatoriosController],
+  controllers: [RelatoriosController, RelatoriosMcpController],
   providers: [RelatorioMonitoriaService],
 })
 export class RelatoriosModule {}

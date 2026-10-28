@@ -222,7 +222,7 @@ sem `Bearer`). O `persistAuthorization` mantém o token entre recarregamentos.
 npm run test
 ```
 
-514 testes de unidade, sem banco, cobrindo o que o PostgreSQL **não** alcança:
+894 testes de unidade, sem banco, cobrindo o que o PostgreSQL **não** alcança:
 autorização, papéis, transições de estado, propriedade de recurso, campos
 derivados e tradução de erro.
 
@@ -244,6 +244,7 @@ derivados e tradução de erro.
 | `email.spec.ts` | modo log sem credencial, payload e cabeçalhos do Brevo, timeout, recusa do provedor e falha de rede sem lançar; corpo nunca no log |
 | `recuperacao-senha.spec.ts` | anti-enumeração (resposta e custo idênticos), teto de tentativas, expiração, uso único, código e senha só como hash |
 | `exportacao-inscricoes.spec.ts` | planilha lida de volta do `.xlsx` gerado: ordem das colunas, nota como número e não texto, nota ausente como célula vazia, filtros idênticos aos da listagem por `replacements`, `NULLS LAST`, e recusa em vez de truncar acima do teto |
+| `mcp.spec.ts` | contrato das 75 ferramentas MCP: tabela de perfil exigido por ferramenta (escrita a partir dos controllers REST), `readOnlyHint` coerente com o que cada uma faz, schema de objeto fechado e sem `$ref` pendente, ausência da inscrição pública e de qualquer argumento com senha |
 | `relatorio-monitoria.spec.ts` | carga horária (minutos como unidade canônica, formatação), preenchimento sobre o modelo REAL do disco, remoção das linhas de exemplo, linhas em branco que sobram, escape de XML, pacote que só altera `document.xml` |
 | `aprovacao-de-inscricao.spec.ts` | a inscrição como única entrada; conta reaproveitada e nunca alterada; responsável é quem aprova, não quem o candidato indicou; período vindo do edital; reuso da monitoria da oferta; ordem dos passos que torna a operação repetível |
 | `professores.spec.ts` | busca na listagem de professores, e a assimetria entre as duas rotas: a pública varre menos campos, e nunca o e-mail |
@@ -1852,6 +1853,100 @@ usar a recuperação de senha para definir uma própria.
 
 ---
 
+## Servidor MCP
+
+A API expõe **75 ferramentas MCP** em `POST /api/mcp`, cobrindo todas as
+operações REST do sistema. É uma **segunda porta para os mesmos services** — não
+uma reimplementação: cada ferramenta chama o método que a rota equivalente já
+chamava.
+
+| Domínio | Ferramentas |
+|---|---|
+| Conta própria | `obter_meu_usuario`, `atualizar_meu_usuario` |
+| Alunos | `criar_aluno`, `listar_alunos`, `atualizar_meu_cadastro_de_aluno`, `buscar_aluno` |
+| Professores | `criar_professor`, `listar_professores`, `atualizar_meu_cadastro_de_professor`, `buscar_professor` |
+| Catálogos | `criar_curso`, `listar_cursos`, `detalhar_curso`, `atualizar_curso` e as quatro equivalentes de disciplina |
+| Monitorias | `listar_monitorias`, `criar_monitoria`, `listar_minhas_monitorias`, `detalhar_monitoria`, `atualizar_monitoria`, `ativar_monitoria`, `encerrar_monitoria`, `cancelar_monitoria` |
+| Participantes | `habilitar_monitor`, `inscrever_monitorado`, `inscrever_me_como_monitorado`, `listar_participantes`, `promover_participante_a_monitor`, `encerrar_participacao` |
+| Disponibilidades | `criar_disponibilidade`, `listar_disponibilidades`, `desativar_disponibilidade` |
+| Atendimentos | `agendar_atendimento`, `agendar_atendimentos_em_lote`, `listar_horarios_livres`, `listar_atendimentos_da_monitoria`, `listar_meus_atendimentos`, `detalhar_atendimento`, `historico_do_atendimento`, `inscrever_me_em_atendimento`, `cancelar_minha_inscricao_em_atendimento`, `reagendar_atendimento`, `atualizar_atendimento`, `realizar_atendimento`, `cancelar_atendimento` |
+| Avaliações | `avaliar_atendimento`, `listar_avaliacoes_do_atendimento`, `listar_avaliacoes_do_monitor` |
+| Materiais | `publicar_material`, `listar_materiais`, `detalhar_material`, `atualizar_material`, `remover_material` |
+| Gamificação | `listar_regras_de_pontuacao`, `listar_ranking`, `obter_meus_pontos` |
+| Analytics | `indicadores_da_plataforma`, `indicadores_da_monitoria`, `atividade_dos_monitores` |
+| Relatório | `gerar_relatorio_de_monitoria` |
+| Editais | `criar_edital`, `listar_editais`, `detalhar_edital`, `atualizar_edital`, `excluir_edital` |
+| Candidaturas | `listar_inscricoes`, `resumo_de_inscricoes_por_disciplina`, `detalhar_inscricao`, `exportar_inscricoes`, `obter_boletim_da_inscricao`, `aprovar_inscricao` |
+| Configuração | `obter_configuracao` |
+
+### Guard não protege ferramenta
+
+É o ponto que decide o desenho deste módulo. No REST, a autorização vem de dois
+guards declarativos, e **nenhum dos dois funciona no caminho MCP**:
+
+- `PerfilGuard` lê `@Perfis()` de uma rota que não existe. O equivalente é
+  `@ToolRoles([PerfilUsuario.PROFESSOR])`, que a biblioteca aplica tanto no
+  `tools/call` quanto no `tools/list` — um ALUNO **não enxerga** as ferramentas
+  de professor, em vez de vê-las e tomar 403;
+- `ParticipacaoGuard` lê `request.params.monitoriaId`. Ferramenta recebe um
+  único objeto de argumentos e não tem `params`.
+
+A solução **não** foi reescrever as quatro condições de participação dentro de
+cada handler MCP. Elas saíram do guard e foram para
+`ParticipacaoService.exigirRequisito(monitoriaId, usuario, requisito)`, que agora
+tem dois chamadores: o guard (que lê o id da rota) e as ferramentas (que o
+recebem como argumento). O guard ficou com uma linha. Autorização duplicada é
+autorização que diverge em silêncio na primeira mudança de regra — e aqui a
+divergência significaria uma segunda porta mais frouxa que a primeira.
+
+### O usuário vem do token, sempre
+
+`usuarioMcp(ctx)` lê o usuário autenticado do contexto MCP, nunca dos
+argumentos. É o mesmo princípio do `@UsuarioAtual()`: `criar_monitoria` não
+aceita `professorId`, `criar_aluno` registra como autor quem está autenticado, e
+`atualizar_meu_cadastro_de_aluno` não recebe um id para alterar.
+
+`CriarMonitoriaDto.professorId` continua sem decorator de validação, e isso
+funciona igual nos dois caminhos: o `McpValidationPipe` roda com as mesmas
+opções do pipe global, e o schema publicado é fechado
+(`additionalProperties: false`). Mandar `professorId` pela ferramenta devolve
+*"data must NOT have additional properties"*, exatamente como o REST devolve 400.
+
+### Três operações que devolvem o arquivo, não os bytes
+
+`gerar_relatorio_de_monitoria`, `exportar_inscricoes` e
+`obter_boletim_da_inscricao` **geram o arquivo de verdade** — passando pela mesma
+autorização e pelas mesmas regras, inclusive a recusa acima do teto de 5000
+linhas da exportação — e devolvem nome, tipo, tamanho e o caminho autenticado
+para baixá-lo.
+
+O binário não trafega por dois motivos: um boletim pode ter 5 MB, que viram
+~6,7 MB em base64 e estouram o limite de qualquer cliente MCP (e, quando não
+estouram, chegam truncados parecendo inteiros); e `.docx`, `.xlsx` e PDF não são
+legíveis como texto, então o conteúdo não ajudaria o cliente a responder nada.
+
+### O que ficou deliberadamente de fora
+
+| Rota REST | Por quê |
+|---|---|
+| `POST /editais/:id/inscricoes` | É a **única escrita anônima** da API e existe para quem ainda não tem conta. Sessão MCP é sempre autenticada: expor a inscrição aqui significaria um professor logado inscrevendo terceiros — o oposto do que o fluxo público permite |
+| `GET /editais/abertos` | Pública e redundante para quem já está autenticado: `listar_editais` com `ativo: true` cobre o caso com mais dados |
+| `GET /professores/publicos` | Subconjunto estrito de `listar_professores`, sem e-mail. Duas ferramentas quase iguais só fazem o cliente escolher a errada |
+| `PATCH /usuarios/eu/senha` | O corpo carrega a senha atual e a nova em texto. Argumento de ferramenta passa pelo cliente e pelo modelo antes de chegar ao servidor; senha não tem o que fazer nesse caminho |
+| `POST /auth/login`, recuperação de senha, OAuth | Lidam com credenciais, e a sessão MCP já está autenticada |
+
+### Schema aninhado é embutido, nunca `$ref`
+
+`dtoParaJsonSchema` gera o schema a partir dos decorators do class-validator e
+dos metadados do Swagger. Uma lista anotada com `@ValidateNested` produziria
+`$ref: '#/definitions/Array'` — referência que o cliente não resolve, porque o
+schema da ferramenta viaja sozinho, sem bloco `definitions`. O tipo real é
+descoberto pelo `@Type(() => X)` do class-transformer e **embutido**; sobrando
+qualquer `$ref`, a função lança no carregamento do módulo, e não na primeira
+chamada em produção.
+
+---
+
 ## Contrato para o frontend
 
 ### Fuso horário — a armadilha de integração mais provável
@@ -2073,5 +2168,6 @@ carga horária acumulada dos monitores e geração do relatório final em `.docx
 | `npm run enviar-lembretes` | dispara as rotinas de notificação agora, sem esperar o agendador |
 | `npm run ver-emails` | imprime todos os textos de e-mail já renderizados, com as variações de singular/plural — para revisar redação sem enviar nada |
 | `npm run ver-relatorio` | confere a carga horária contra uma soma independente em SQL e gera um `.docx` a partir dos dados reais, só leitura |
+| `npm run ver-mcp` | sobe a aplicação, lista as ferramentas MCP como PROFESSOR e como ALUNO e confere o recorte por perfil, depois chama uma ferramenta de leitura e duas inválidas que precisam ser recusadas |
 | `npm run ver-exportacao` | gera a planilha de cada edital, lê o `.xlsx` de volta e compara célula a célula com uma consulta independente, só leitura |
 | `npm run lint` · `format` | ESLint (com fix) e Prettier |

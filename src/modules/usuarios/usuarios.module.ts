@@ -8,7 +8,10 @@ import { Professor } from './entities/professor.model';
 import { Usuario } from './entities/usuario.model';
 import { HashService } from './hash.service';
 import { ProfessoresController } from './professores.controller';
+import { AlunosMcpController } from './alunos.mcp-controller';
+import { ProfessoresMcpController } from './professores.mcp-controller';
 import { UsuariosController } from './usuarios.controller';
+import { UsuariosMcpController } from './usuarios.mcp-controller';
 import { UsuariosService } from './usuarios.service';
 import { CursosModule } from '../cursos/cursos.module';
 
@@ -26,7 +29,14 @@ import { CursosModule } from '../cursos/cursos.module';
     SequelizeModule.forFeature([Usuario, Aluno, Professor, MonitoriaParticipante]),
     CursosModule,
   ],
-  controllers: [UsuariosController, AlunosController, ProfessoresController],
+  controllers: [
+    UsuariosController,
+    AlunosController,
+    ProfessoresController,
+    UsuariosMcpController,
+    AlunosMcpController,
+    ProfessoresMcpController,
+  ],
   providers: [UsuariosService, HashService],
   exports: [UsuariosService, HashService],
 })

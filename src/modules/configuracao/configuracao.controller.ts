@@ -3,6 +3,7 @@ import { ConfigService } from '@nestjs/config';
 import { ApiOkResponse, ApiOperation, ApiTags } from '@nestjs/swagger';
 
 import { Publico } from '../../common/decorators/publico.decorator';
+import { montarConfiguracao } from './montar-configuracao';
 import { ConfiguracaoRespostaDto } from './dto/configuracao-resposta.dto';
 
 /**
@@ -31,19 +32,6 @@ export class ConfiguracaoController {
   })
   @ApiOkResponse({ type: ConfiguracaoRespostaDto })
   obter(): ConfiguracaoRespostaDto {
-    return {
-      fusoHorario: this.config.getOrThrow<string>('agenda.fusoHorario'),
-      agendamento: {
-        duracaoMinimaMinutos: this.config.getOrThrow<number>('agenda.duracaoMinimaMinutos'),
-        duracaoMaximaMinutos: this.config.getOrThrow<number>('agenda.duracaoMaximaMinutos'),
-        duracaoPadraoMinutos: this.config.getOrThrow<number>('agenda.duracaoPadraoMinutos'),
-        antecedenciaMinimaMinutos: this.config.getOrThrow<number>(
-          'agenda.antecedenciaMinimaMinutos',
-        ),
-        cancelamentoAntecedenciaMinutos: this.config.getOrThrow<number>(
-          'agenda.cancelamentoAntecedenciaMinutos',
-        ),
-      },
-    };
+    return montarConfiguracao(this.config);
   }
 }

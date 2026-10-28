@@ -4,6 +4,7 @@ import { SequelizeModule } from '@nestjs/sequelize';
 import { AtendimentoParticipante } from '../atendimentos/entities/atendimento-participante.model';
 import { MonitoriasModule } from '../monitorias/monitorias.module';
 import { AvaliacoesController } from './avaliacoes.controller';
+import { AvaliacoesMcpController } from './avaliacoes.mcp-controller';
 import { AvaliacoesService } from './avaliacoes.service';
 import { Avaliacao } from './entities/avaliacao.model';
 
@@ -16,7 +17,7 @@ import { Avaliacao } from './entities/avaliacao.model';
  */
 @Module({
   imports: [SequelizeModule.forFeature([Avaliacao, AtendimentoParticipante]), MonitoriasModule],
-  controllers: [AvaliacoesController],
+  controllers: [AvaliacoesController, AvaliacoesMcpController],
   providers: [AvaliacoesService],
   exports: [AvaliacoesService],
 })

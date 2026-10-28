@@ -2,6 +2,7 @@ import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/commo
 import { InjectModel } from '@nestjs/sequelize';
 import { Transaction } from 'sequelize';
 
+import { RequisitoParticipacao } from '../../common/decorators/exige-participacao.decorator';
 import { PapelMonitoria } from '../../common/enums/papel-monitoria.enum';
 import { PerfilUsuario } from '../../common/enums/perfil-usuario.enum';
 import { StatusParticipacao } from '../../common/enums/status-participacao.enum';
@@ -78,6 +79,49 @@ export class ParticipacaoService {
       participacao,
       papel: participacao?.papel ?? null,
     };
+  }
+
+  /**
+   * Avalia um `RequisitoParticipacao` inteiro e devolve o contexto resolvido.
+   *
+   * E a decisao do `ParticipacaoGuard`, extraida para ca porque agora ela tem
+   * DOIS chamadores: o guard, que le o `:monitoriaId` da rota HTTP, e as
+   * ferramentas MCP, que recebem o mesmo id como argumento e nao passam por
+   * guard nenhum. Duplicar as quatro condicoes abaixo nos dois lugares faria a
+   * autorizacao do MCP envelhecer sozinha na primeira mudanca de regra — e
+   * autorizacao que diverge em silencio e o pior tipo de bug deste sistema.
+   */
+  async exigirRequisito(
+    monitoriaId: string,
+    usuario: UsuarioAutenticado,
+    requisito: RequisitoParticipacao,
+  ): Promise<ContextoParticipacao> {
+    const contexto = await this.obterContexto(monitoriaId, usuario);
+    const regraProfessor = requisito.professorResponsavel ?? 'PERMITIDO';
+
+    if (regraProfessor === 'EXIGIDO' && !contexto.ehProfessorResponsavel) {
+      throw new ForbiddenException(
+        'Apenas o professor responsavel pode administrar esta monitoria.',
+      );
+    }
+
+    const professorAutorizado = regraProfessor === 'PERMITIDO' || regraProfessor === 'EXIGIDO';
+
+    if (contexto.ehProfessorResponsavel && professorAutorizado) {
+      return contexto;
+    }
+
+    if (!contexto.participacao) {
+      throw new ForbiddenException('Voce nao participa desta monitoria.');
+    }
+
+    if (requisito.papeis?.length && !requisito.papeis.includes(contexto.papel!)) {
+      throw new ForbiddenException(
+        `Esta operacao exige o papel: ${requisito.papeis.join(' ou ')}.`,
+      );
+    }
+
+    return contexto;
   }
 
   /** Acesso de leitura ao conteudo da monitoria: responsavel ou participante ativo. */

@@ -25,6 +25,12 @@
     "strictPropertyInitialization": false,
     "useDefineForClassFields": false
   },
+  /**
+   * O ts-node compila arquivo a arquivo e, sem isto, ignora os `.d.ts`
+   * ambientes de `src/types` — que e onde mora a declaracao do
+   * `class-transformer/cjs/storage` usada pelo gerador de schema do MCP.
+   */
+  "ts-node": { "files": true },
   "include": ["src/**/*.ts", "test/**/*.ts"],
   "exclude": ["node_modules", "dist"]
 }

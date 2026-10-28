@@ -5,6 +5,8 @@ import { Avaliacao } from '../avaliacoes/entities/avaliacao.model';
 import { DisponibilidadesModule } from '../disponibilidades/disponibilidades.module';
 import { MonitoriasModule } from '../monitorias/monitorias.module';
 import { AtendimentosController } from './atendimentos.controller';
+import { AtendimentosMcpController } from './atendimentos.mcp-controller';
+import { AtendimentosMonitoriaMcpController } from './atendimentos-monitoria.mcp-controller';
 import { AtendimentosMonitoriaController } from './atendimentos-monitoria.controller';
 import { AtendimentosService } from './atendimentos.service';
 import { Atendimento } from './entities/atendimento.model';
@@ -32,7 +34,12 @@ import { AtendimentoStatusHistorico } from './entities/atendimento-status-histor
     MonitoriasModule,
     DisponibilidadesModule,
   ],
-  controllers: [AtendimentosMonitoriaController, AtendimentosController],
+  controllers: [
+    AtendimentosMonitoriaController,
+    AtendimentosController,
+    AtendimentosMonitoriaMcpController,
+    AtendimentosMcpController,
+  ],
   providers: [AtendimentosService],
   exports: [AtendimentosService],
 })

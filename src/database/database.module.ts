@@ -2,9 +2,9 @@ import { Module } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { SequelizeModule } from '@nestjs/sequelize';
 
-import { OAuthCliente } from 'src/modules/oauth/entities/oauth-cliente.model';
-import { OAuthCodigo } from 'src/modules/oauth/entities/oauth-codigo.model';
-import { OAuthRefreshToken } from 'src/modules/oauth/entities/oauth-refresh-token.model';
+import { OAuthCliente } from '../modules/oauth/entities/oauth-cliente.model';
+import { OAuthCodigo } from '../modules/oauth/entities/oauth-codigo.model';
+import { OAuthRefreshToken } from '../modules/oauth/entities/oauth-refresh-token.model';
 import { AtendimentoParticipante } from '../modules/atendimentos/entities/atendimento-participante.model';
 import { AtendimentoStatusHistorico } from '../modules/atendimentos/entities/atendimento-status-historico.model';
 import { Atendimento } from '../modules/atendimentos/entities/atendimento.model';

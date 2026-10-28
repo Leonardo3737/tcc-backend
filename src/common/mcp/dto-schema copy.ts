@@ -19,7 +19,8 @@ export function dtoParaJsonSchema(dto: Ctor): Record<string, unknown> {
     if (!swagger) continue;
     const alvo = schema.properties[prop];
     if (swagger.description && !alvo.description) alvo.description = swagger.description;
-    if (swagger.example !== undefined && alvo.examples === undefined) alvo.examples = [swagger.example];
+    if (swagger.example !== undefined && alvo.examples === undefined)
+      alvo.examples = [swagger.example];
   }
 
   schema.additionalProperties = false;

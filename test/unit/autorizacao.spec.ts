@@ -6,6 +6,7 @@ import { PapelMonitoria } from '../../src/common/enums/papel-monitoria.enum';
 import { StatusParticipacao } from '../../src/common/enums/status-participacao.enum';
 import { PerfilGuard } from '../../src/common/guards/perfil.guard';
 import { ParticipacaoGuard } from '../../src/modules/monitorias/guards/participacao.guard';
+import { ParticipacaoService } from '../../src/modules/monitorias/participacao.service';
 import { UsuarioAutenticado } from '../../src/common/types/usuario-autenticado';
 
 function criarContexto(requisicao: Record<string, unknown>): ExecutionContext {
@@ -66,14 +67,23 @@ describe('PerfilGuard — autorizacao por perfil de identidade', () => {
 describe('ParticipacaoGuard — autorizacao contextual por monitoria', () => {
   const monitoriaId = '11111111-1111-4111-8111-111111111111';
 
+  /**
+   * O dublê e um ParticipacaoService REAL com apenas `obterContexto` stubado.
+   *
+   * A decisao (papel exigido, professor PERMITIDO/EXIGIDO/NEGADO) mora em
+   * `exigirRequisito`, e nao mais no guard, porque as ferramentas MCP precisam
+   * dela sem ter rota HTTP. Stubar o metodo inteiro faria estes testes provarem
+   * que o dublê funciona; stubar so a ida ao banco mantem a regra sob teste e,
+   * de quebra, cobre tambem o caminho do MCP.
+   */
   function criarGuard(metadado: unknown, contextoParticipacao: unknown) {
-    const servico = {
-      obterContexto: jest.fn().mockResolvedValue(contextoParticipacao),
-    };
+    const servico = Object.create(ParticipacaoService.prototype) as ParticipacaoService;
+    const obterContexto = jest.fn().mockResolvedValue(contextoParticipacao);
+    servico.obterContexto = obterContexto;
 
     return {
-      guard: new ParticipacaoGuard(criarReflector(metadado), servico as never),
-      servico,
+      guard: new ParticipacaoGuard(criarReflector(metadado), servico),
+      servico: { obterContexto },
     };
   }
 

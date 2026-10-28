@@ -14,6 +14,7 @@ import { MonitoriasMcpController } from './monitorias.mcp-controller';
 import { MonitoriasService } from './monitorias.service';
 import { ParticipacaoService } from './participacao.service';
 import { ParticipantesController } from './participantes.controller';
+import { ParticipantesMcpController } from './participantes.mcp-controller';
 import { ParticipantesService } from './participantes.service';
 
 /**
@@ -43,7 +44,12 @@ import { ParticipantesService } from './participantes.service';
     ]),
     DisciplinasModule,
   ],
-  controllers: [MonitoriasController, ParticipantesController, MonitoriasMcpController],
+  controllers: [
+    MonitoriasController,
+    ParticipantesController,
+    MonitoriasMcpController,
+    ParticipantesMcpController,
+  ],
   providers: [MonitoriasService, ParticipacaoService, ParticipantesService, ParticipacaoGuard],
   exports: [MonitoriasService, ParticipacaoService, ParticipantesService, ParticipacaoGuard],
 })

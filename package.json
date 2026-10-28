@@ -24,6 +24,7 @@
     "ver-relatorio": "npm run build && node scripts/ver-relatorio-no-banco.cjs",
     "ver-exportacao": "npm run build && node scripts/ver-exportacao.cjs",
     "test:fluxo": "node scripts/fluxo-completo.mjs",
+    "ver-mcp": "ts-node -r dotenv/config scripts/ver-mcp.ts",
     "test": "jest",
     "test:watch": "jest --watch",
     "test:cov": "jest --coverage"

@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 
 import { MonitoriasModule } from '../monitorias/monitorias.module';
 import { AnalyticsController } from './analytics.controller';
+import { AnalyticsMcpController } from './analytics.mcp-controller';
 import { AnalyticsService } from './analytics.service';
 
 /**
@@ -17,7 +18,7 @@ import { AnalyticsService } from './analytics.service';
  */
 @Module({
   imports: [MonitoriasModule],
-  controllers: [AnalyticsController],
+  controllers: [AnalyticsController, AnalyticsMcpController],
   providers: [AnalyticsService],
   exports: [AnalyticsService],
 })

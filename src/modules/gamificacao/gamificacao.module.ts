@@ -4,6 +4,7 @@ import { SequelizeModule } from '@nestjs/sequelize';
 import { MonitoriaParticipante } from '../monitorias/entities/monitoria-participante.model';
 import { PontuacaoEvento } from './entities/pontuacao-evento.model';
 import { GamificacaoController } from './gamificacao.controller';
+import { GamificacaoMcpController } from './gamificacao.mcp-controller';
 import { GamificacaoService } from './gamificacao.service';
 
 /**
@@ -18,7 +19,7 @@ import { GamificacaoService } from './gamificacao.service';
  */
 @Module({
   imports: [SequelizeModule.forFeature([PontuacaoEvento, MonitoriaParticipante])],
-  controllers: [GamificacaoController],
+  controllers: [GamificacaoController, GamificacaoMcpController],
   providers: [GamificacaoService],
   exports: [GamificacaoService],
 })

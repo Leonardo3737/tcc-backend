@@ -19,7 +19,8 @@ export class McpValidationPipe extends ValidationPipe {
       transform: true,
       whitelist: true,
       forbidNonWhitelisted: true,
-      exceptionFactory: (erros) => new RpcException(`Parametros invalidos: ${mensagens(erros).join('; ')}`),
+      exceptionFactory: (erros) =>
+        new RpcException(`Parametros invalidos: ${mensagens(erros).join('; ')}`),
     });
   }
 }

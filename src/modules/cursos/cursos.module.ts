@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { SequelizeModule } from '@nestjs/sequelize';
 
 import { CursosController } from './cursos.controller';
+import { CursosMcpController } from './cursos.mcp-controller';
 import { CursosService } from './cursos.service';
 import { Curso } from './entities/curso.model';
 
@@ -14,7 +15,7 @@ import { Curso } from './entities/curso.model';
  */
 @Module({
   imports: [SequelizeModule.forFeature([Curso])],
-  controllers: [CursosController],
+  controllers: [CursosController, CursosMcpController],
   providers: [CursosService],
   exports: [CursosService],
 })

@@ -1,8 +1,7 @@
 import { ArgumentsHost, Catch, HttpException, Logger, RpcExceptionFilter } from '@nestjs/common';
 import { RpcException } from '@nestjs/microservices';
 import { Observable, throwError } from 'rxjs';
-import { mensagemDeConstraint } from 'src/common/filters/todas-excecoes.filter';
-
+import { mensagemDeConstraint } from '../filters/todas-excecoes.filter';
 
 /**
  * Equivalente ao TodasExcecoesFilter para as ferramentas MCP. Preserva a

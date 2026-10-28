@@ -11,11 +11,13 @@ import { Usuario } from '../usuarios/entities/usuario.model';
 import { UsuariosModule } from '../usuarios/usuarios.module';
 import { AprovacaoDeInscricaoService } from './aprovacao-de-inscricao.service';
 import { EditaisController } from './editais.controller';
+import { EditaisMcpController } from './editais.mcp-controller';
 import { EditaisService } from './editais.service';
 import { Boletim } from './entities/boletim.model';
 import { Edital } from './entities/edital.model';
 import { InscricaoEdital } from './entities/inscricao-edital.model';
 import { InscricoesController } from './inscricoes.controller';
+import { InscricoesMcpController } from './inscricoes.mcp-controller';
 import { InscricoesEditalService } from './inscricoes-edital.service';
 import { InscricoesPublicasController } from './inscricoes-publicas.controller';
 
@@ -81,7 +83,13 @@ import { InscricoesPublicasController } from './inscricoes-publicas.controller';
     UsuariosModule,
     MonitoriasModule,
   ],
-  controllers: [EditaisController, InscricoesPublicasController, InscricoesController],
+  controllers: [
+    EditaisController,
+    InscricoesPublicasController,
+    InscricoesController,
+    EditaisMcpController,
+    InscricoesMcpController,
+  ],
   providers: [EditaisService, InscricoesEditalService, AprovacaoDeInscricaoService],
 })
 export class EditaisModule {}
